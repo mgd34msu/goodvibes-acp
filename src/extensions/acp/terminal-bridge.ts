@@ -9,7 +9,7 @@
 import type { AgentSideConnection } from '@agentclientprotocol/sdk';
 import { TerminalHandle as AcpTerminalHandle } from '@agentclientprotocol/sdk';
 import type * as schema from '@agentclientprotocol/sdk';
-import type { ITerminal, TerminalHandle, ExitResult } from '../../types/registry.js';
+import type { ITerminal, TerminalHandle, TerminalCreateOptions, ExitResult } from '../../types/registry.js';
 import { spawn, type ChildProcess } from 'node:child_process';
 
 // ---------------------------------------------------------------------------
@@ -67,22 +67,27 @@ export class AcpTerminal implements ITerminal {
    * Routes to ACP terminal if the client advertises `terminal: true`,
    * otherwise spawns a child process directly.
    */
-  async create(command: string, args?: string[]): Promise<TerminalHandle> {
+  async create(opts: TerminalCreateOptions): Promise<TerminalHandle> {
     const id = `term-${this._nextId++}`;
-    const fullCommand = args && args.length > 0 ? `${command} ${args.join(' ')}` : command;
+    const { command = '', env, cwd } = opts;
     const handle: TerminalHandle = {
       id,
-      command: fullCommand,
+      command,
       createdAt: Date.now(),
     };
+
+    // Convert env Record to ACP EnvVariable array
+    const envVars: schema.EnvVariable[] | undefined = env
+      ? Object.entries(env).map(([name, value]) => ({ name, value }))
+      : undefined;
 
     if (this.clientCapabilities.terminal) {
       // ACP-backed terminal
       const acpHandle = await this.conn.createTerminal({
         command,
-        args: args ?? [],
         sessionId: this.sessionId,
-        cwd: this.cwd,
+        cwd: cwd ?? this.cwd,
+        ...(envVars ? { env: envVars } : {}),
       });
 
       this._handles.set(id, { kind: 'acp', handle, acpHandle });
@@ -92,10 +97,11 @@ export class AcpTerminal implements ITerminal {
       const stderrChunks: string[] = [];
       let exitCode: number | null = null;
 
-      const proc = spawn(command, args ?? [], {
-        cwd: this.cwd,
-        shell: false,
+      const proc = spawn(command, [], {
+        cwd: cwd ?? this.cwd,
+        shell: true,
         stdio: 'pipe',
+        env: env ? { ...process.env, ...env } : process.env,
       });
 
       const internal: SpawnBackedHandle = {
@@ -131,16 +137,30 @@ export class AcpTerminal implements ITerminal {
   /**
    * Get the current output of a terminal (stdout + stderr combined).
    */
-  async output(handle: TerminalHandle): Promise<string> {
+  async output(handle: TerminalHandle, timeout?: number): Promise<{ output: string; exitCode: number | null }> {
     const internal = this._requireHandle(handle.id);
 
     if (internal.kind === 'acp') {
-      const result = await internal.acpHandle.currentOutput();
-      return result.output;
+      const outputPromise = internal.acpHandle.currentOutput();
+      const result: schema.TerminalOutputResponse = timeout !== undefined
+        ? await Promise.race([
+            outputPromise,
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error(`output() timed out after ${timeout}ms`)), timeout)
+            ),
+          ])
+        : await outputPromise;
+      return {
+        output: result.output,
+        exitCode: result.exitStatus?.exitCode ?? null,
+      };
     }
 
     // Spawn-backed: combine buffered stdout
-    return internal.stdout.join('');
+    return {
+      output: internal.stdout.join(''),
+      exitCode: internal.exitCode,
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -153,26 +173,37 @@ export class AcpTerminal implements ITerminal {
    * For ACP-backed terminals, calls waitForExit() then fetches final output
    * via currentOutput() since WaitForTerminalExitResponse only carries exitCode.
    */
-  async waitForExit(handle: TerminalHandle): Promise<ExitResult> {
+  async waitForExit(handle: TerminalHandle, timeout?: number): Promise<ExitResult> {
     const internal = this._requireHandle(handle.id);
     const startedAt = Date.now();
 
     if (internal.kind === 'acp') {
-      const exitResult = await internal.acpHandle.waitForExit();
-      const outputResult = await internal.acpHandle.currentOutput();
-      return {
-        exitCode: exitResult.exitCode ?? 0,
-        stdout: outputResult.output,
-        stderr: '',
-        durationMs: Date.now() - startedAt,
-      };
+      const exitPromise = internal.acpHandle.waitForExit().then(async (exitResult) => {
+        const outputResult: schema.TerminalOutputResponse = await internal.acpHandle.currentOutput();
+        return {
+          exitCode: exitResult.exitCode ?? 0,
+          stdout: outputResult.output,
+          stderr: '',
+          durationMs: Date.now() - startedAt,
+        };
+      });
+
+      if (timeout !== undefined) {
+        return Promise.race([
+          exitPromise,
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`waitForExit() timed out after ${timeout}ms`)), timeout)
+          ),
+        ]);
+      }
+      return exitPromise;
     }
 
     // Spawn-backed: wait for the process to complete
     const spawnedAt = internal.startedAt;
     const proc = internal.process;
 
-    return new Promise<ExitResult>((resolve) => {
+    const waitPromise = new Promise<ExitResult>((resolve) => {
       const finish = () => {
         resolve({
           exitCode: internal.exitCode ?? 0,
@@ -193,6 +224,16 @@ export class AcpTerminal implements ITerminal {
         });
       }
     });
+
+    if (timeout !== undefined) {
+      return Promise.race([
+        waitPromise,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`waitForExit() timed out after ${timeout}ms`)), timeout)
+        ),
+      ]);
+    }
+    return waitPromise;
   }
 
   // -------------------------------------------------------------------------

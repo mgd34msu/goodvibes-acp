@@ -15,6 +15,8 @@ export type RecordedEvent = {
   timestamp: number;
   sessionId?: string;
   data: unknown;
+  /** Extension metadata carried by the source event, if present */
+  _meta?: Record<string, unknown>;
 };
 
 /**
@@ -54,6 +56,13 @@ export class EventRecorder {
           timestamp: event.timestamp,
           ...(event.sessionId !== undefined ? { sessionId: event.sessionId } : {}),
           data: event.payload,
+          ...(event.payload !== null &&
+          typeof event.payload === 'object' &&
+          '_meta' in event.payload &&
+          typeof (event.payload as Record<string, unknown>)['_meta'] === 'object' &&
+          (event.payload as Record<string, unknown>)['_meta'] !== null
+            ? { _meta: (event.payload as Record<string, unknown>)['_meta'] as Record<string, unknown> }
+            : {}),
         };
 
         if (this._events.length >= this._maxEvents) {

@@ -48,6 +48,8 @@ export class AcpFileSystem implements ITextFileAccess {
       const response = await this.conn.readTextFile({
         path,
         sessionId: this.sessionId,
+        line: options?.line,
+        limit: options?.limit,
       });
       return response.content;
     }
@@ -58,7 +60,15 @@ export class AcpFileSystem implements ITextFileAccess {
     if (!VALID_ENCODINGS.has(encoding as BufferEncoding)) {
       throw new Error(`Unsupported encoding: ${encoding}`);
     }
-    return readFile(path, { encoding: encoding as BufferEncoding });
+    let text = await readFile(path, { encoding: encoding as BufferEncoding });
+    // Apply line/limit slicing if requested
+    if (options?.line !== undefined || options?.limit !== undefined) {
+      const lines = text.split('\n');
+      const startIdx = options.line !== undefined ? Math.max(0, options.line - 1) : 0;
+      const sliced = options.limit !== undefined ? lines.slice(startIdx, startIdx + options.limit) : lines.slice(startIdx);
+      text = sliced.join('\n');
+    }
+    return text;
   }
 
   // -------------------------------------------------------------------------

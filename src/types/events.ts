@@ -20,7 +20,12 @@ export type Event<T = unknown> = {
   timestamp: number;
   /** Domain-specific payload */
   payload: T;
-  /** Optional metadata (protocol info, trace ids, etc.) */
+  /**
+   * Optional metadata. Reserved keys per ACP spec (W3C Trace Context):
+   * - `traceparent`: W3C trace parent header
+   * - `tracestate`: W3C trace state header
+   * - `baggage`: W3C baggage header
+   */
   _meta?: Record<string, unknown>;
 };
 
@@ -217,3 +222,19 @@ export type AgentCompletedEvent = Event<AgentCompletedPayload> & { type: 'agent:
 
 /** A fully-typed wrfc:completed event */
 export type WRFCCompletedEvent = Event<WRFCCompletedPayload> & { type: 'wrfc:completed' };
+
+// ---------------------------------------------------------------------------
+// ACP wire-protocol update discriminators
+// ---------------------------------------------------------------------------
+
+/** ACP wire-protocol session update discriminators */
+export type AcpSessionUpdateType =
+  | 'agent_message_chunk'
+  | 'tool_call'
+  | 'tool_call_update'
+  | 'plan'
+  | 'agent_thought_chunk'
+  | 'session_info'
+  | 'available_commands'
+  | 'current_mode'
+  | 'config_options_update';

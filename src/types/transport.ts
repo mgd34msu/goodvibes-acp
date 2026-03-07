@@ -11,6 +11,13 @@
 // ---------------------------------------------------------------------------
 
 /**
+ * A JSON-RPC 2.0 message as transmitted on the ACP wire.
+ * Use the specific subtypes (RequestMessage, ResponseMessage, NotificationMessage)
+ * for type-narrowing via discriminated union.
+ */
+export type AnyMessage = RequestMessage | ResponseMessage | NotificationMessage;
+
+/**
  * A bidirectional stream with typed readable and writable ends.
  *
  * NOTE: WritableStream and ReadableStream are Web Streams API globals.
@@ -19,16 +26,19 @@
  * install a polyfill.
  */
 export type Stream = {
-  writable: WritableStream<unknown>;
-  readable: ReadableStream<unknown>;
+  writable: WritableStream<AnyMessage>;
+  readable: ReadableStream<AnyMessage>;
 };
 
 // ---------------------------------------------------------------------------
 // Transport type
 // ---------------------------------------------------------------------------
 
-/** The type of transport protocol in use */
-export type TransportType = 'stdio' | 'tcp' | 'websocket' | 'unix-socket';
+/**
+ * The type of transport protocol in use.
+ * ACP-standard: stdio, http, websocket. GoodVibes extensions: tcp, unix-socket
+ */
+export type TransportType = 'stdio' | 'http' | 'websocket' | 'tcp' | 'unix-socket';
 
 // ---------------------------------------------------------------------------
 // Transport configuration
@@ -66,28 +76,65 @@ export type TransportConfig = {
 };
 
 // ---------------------------------------------------------------------------
-// Message (JSON-RPC style)
+// Message (JSON-RPC 2.0 discriminated union)
 // ---------------------------------------------------------------------------
 
-/** A JSON-RPC 2.0 style message used on the wire */
-export type Message = {
+/** JSON-RPC 2.0 base — common to all message types */
+type JsonRpcBase = {
   /** JSON-RPC version (always "2.0") */
   jsonrpc: '2.0';
-  /** Request/notification ID (absent for notifications) */
-  id?: string | number;
-  /** Method name (absent for responses) */
-  method?: string;
-  /** Method parameters (for requests/notifications) */
-  params?: unknown;
-  /** Result value (for successful responses) */
-  result?: unknown;
-  /** Error object (for error responses) */
-  error?: {
-    code: number;
-    message: string;
-    data?: unknown;
-  };
 };
+
+/**
+ * A JSON-RPC 2.0 request — has both `id` and `method`.
+ * Discriminated by presence of `method` with a required `id`.
+ */
+export type RequestMessage = JsonRpcBase & {
+  /** Request/response correlation ID */
+  id: string | number;
+  /** Method to invoke */
+  method: string;
+  /** Method parameters */
+  params?: unknown;
+};
+
+/**
+ * A JSON-RPC 2.0 notification — has `method` but no `id`.
+ * Fire-and-forget; no response is expected.
+ */
+export type NotificationMessage = JsonRpcBase & {
+  id?: never;
+  /** Method to invoke */
+  method: string;
+  /** Method parameters */
+  params?: unknown;
+};
+
+/**
+ * A JSON-RPC 2.0 response — has `id` but no `method`.
+ * Carries either `result` (success) or `error` (failure).
+ */
+export type ResponseMessage = JsonRpcBase & {
+  /** Correlates to the originating request */
+  id: string | number | null;
+  method?: never;
+} & (
+    | { result: unknown; error?: never }
+    | {
+        result?: never;
+        error: {
+          code: number;
+          message: string;
+          data?: unknown;
+        };
+      }
+  );
+
+/**
+ * Discriminated union of all JSON-RPC 2.0 message types used on the ACP wire.
+ * Narrow to a specific type via the `method` and `id` fields.
+ */
+export type Message = RequestMessage | ResponseMessage | NotificationMessage;
 
 // ---------------------------------------------------------------------------
 // Connection state

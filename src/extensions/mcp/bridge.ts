@@ -213,10 +213,12 @@ export class McpBridge {
       });
     }
 
-    // HTTP/SSE: not supported yet
-    throw new Error(
-      `MCP transport "${'type' in server ? (server as { type: string }).type : 'unknown'}" is not yet supported. Only stdio is currently implemented.`,
-    );
+    // HTTP/SSE: not supported yet — log a warning and skip gracefully.
+    // NOTE: Agent capability declaration (`mcp: { http: false, sse: false }`) should
+    // be added to the agent descriptor in src/extensions/acp/agent.ts once that
+    // field is part of the ACP capability schema.
+    console.error(`[MCP] Skipping non-stdio server "${server.name}": HTTP/SSE transport not yet supported`);
+    return null;
   }
 
   private _adaptTools(serverId: string, mcpTools: McpToolDef[]): ToolDefinition[] {

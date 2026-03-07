@@ -19,6 +19,9 @@ import type { McpBridge } from '../mcp/bridge.js';
 import { PlanEmitter } from './plan-emitter.js';
 import { CommandsEmitter } from './commands-emitter.js';
 
+// The protocol version this agent supports (ISS-029).
+const SUPPORTED_VERSION: number = typeof PROTOCOL_VERSION === 'number' ? PROTOCOL_VERSION : 1;
+
 // ---------------------------------------------------------------------------
 // Adapter interface
 // ---------------------------------------------------------------------------
@@ -56,12 +59,12 @@ function messageChunkUpdate(
 }
 
 /**
- * Build a typed session_info_update SessionUpdate.
- * NOTE: The literal used here is 'session_info_update'. ACP doc-04 references 'session_info'
- * — if the SDK is updated to use that name, this cast will need updating.
+ * Build a typed session_info SessionUpdate.
+ * Uses 'session_info' discriminator per ACP spec.
+ * Payload carries a text content block with the session title.
  */
-function sessionInfoUpdate(title: string, updatedAt: string): schema.SessionUpdate {
-  return { sessionUpdate: 'session_info_update' as const, title, updatedAt };
+function sessionInfoUpdate(title: string): schema.SessionUpdate {
+  return { sessionUpdate: 'session_info' as any, content: { type: 'text', text: title } as any } as schema.SessionUpdate;
 }
 
 // ---------------------------------------------------------------------------
@@ -109,12 +112,29 @@ export class GoodVibesAgent implements Agent {
   async initialize(params: schema.InitializeRequest): Promise<schema.InitializeResponse> {
     this._clientCapabilities = params.clientCapabilities ?? {};
 
+    // ISS-098: Log client info and capabilities on initialize (stderr only — stdout is JSON-RPC)
+    console.error('[GoodVibesAgent] initialize — clientInfo:', JSON.stringify(params.clientInfo ?? null));
+    console.error('[GoodVibesAgent] initialize — clientCapabilities:', JSON.stringify(this._clientCapabilities));
+
+    // ISS-029: Protocol version negotiation
+    const clientVersion = typeof params.protocolVersion === 'number' ? params.protocolVersion : SUPPORTED_VERSION;
+    if (clientVersion < SUPPORTED_VERSION) {
+      throw Object.assign(
+        new Error(`Unsupported protocol version: ${clientVersion}. Minimum supported: ${SUPPORTED_VERSION}`),
+        { code: -32600 },
+      );
+    }
+    const negotiatedVersion = Math.min(clientVersion, SUPPORTED_VERSION) as schema.ProtocolVersion;
+
     return {
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: negotiatedVersion,
       agentInfo: {
         name: 'goodvibes',
+        title: 'GoodVibes Runtime',
         version: '0.1.0',
       },
+      // ISS-003: Advertise no authentication required
+      authMethods: [],
       agentCapabilities: {
         loadSession: true,
         mcpCapabilities: { http: false, sse: false },
@@ -122,6 +142,12 @@ export class GoodVibesAgent implements Agent {
           embeddedContext: true,
           image: false,
           audio: false,
+        },
+        // ISS-030: Advertise session capabilities (all unstable features disabled)
+        sessionCapabilities: {
+          fork: null,
+          list: null,
+          resume: null,
         },
       },
     };
@@ -211,12 +237,19 @@ export class GoodVibesAgent implements Agent {
       });
     }
 
-    return {
-      configOptions: buildConfigOptions(
-        modeFromConfigValue(context.config.mode),
-        context.config.model,
-      ),
-    };
+    // ISS-032: Emit config options as a session notification, then return null
+    await this.conn.sessionUpdate({
+      sessionId: params.sessionId,
+      update: {
+        sessionUpdate: 'config_option_update',
+        configOptions: buildConfigOptions(
+          modeFromConfigValue(context.config.mode),
+          context.config.model,
+        ),
+      } as schema.SessionUpdate,
+    });
+
+    return null as any;
   }
 
   // -------------------------------------------------------------------------
@@ -269,7 +302,7 @@ export class GoodVibesAgent implements Agent {
       // Emit session_info_update to signal work has started
       await this.conn.sessionUpdate({
         sessionId,
-        update: sessionInfoUpdate(task.slice(0, 100), new Date().toISOString()),
+        update: sessionInfoUpdate(task.slice(0, 100)),
       });
 
       const workId = crypto.randomUUID();
@@ -285,10 +318,7 @@ export class GoodVibesAgent implements Agent {
       });
 
       if (controller.signal.aborted) {
-        await this.conn.sessionUpdate({
-          sessionId,
-          update: { sessionUpdate: 'finish', stopReason: 'cancelled' } as any,
-        }).catch(() => {});
+        // ISS-103: Do not emit non-spec 'finish' update; stopReason is in the return value
         return { stopReason: 'cancelled' };
       }
 
@@ -312,35 +342,17 @@ export class GoodVibesAgent implements Agent {
         timestamp: Date.now(),
       });
 
-      // Emit finish session update before returning
-      await this.conn.sessionUpdate({
-        sessionId,
-        update: { sessionUpdate: 'finish', stopReason: 'end_turn' } as any,
-      });
-
+      // ISS-103: stopReason communicated via return value only; no 'finish' session update
       return { stopReason: 'end_turn' };
     } catch (err) {
       if (controller.signal.aborted) {
-        await this.conn.sessionUpdate({
-          sessionId,
-          update: { sessionUpdate: 'finish', stopReason: 'cancelled' } as any,
-        }).catch(() => {});
+        // ISS-103: Do not emit non-spec 'finish' update; stopReason is in the return value
         return { stopReason: 'cancelled' };
       }
 
-      // Stream error to client
+      // ISS-084: Propagate internal errors as JSON-RPC errors rather than disguising as end_turn
       const acpErr = toAcpError(err);
-      await this.conn.sessionUpdate({
-        sessionId,
-        update: messageChunkUpdate('agent_message_chunk', { type: 'text', text: `Error: ${acpErr.message}` }),
-      }).catch(() => {});
-
-      await this.conn.sessionUpdate({
-        sessionId,
-        update: { sessionUpdate: 'finish', stopReason: 'end_turn' } as any,
-      }).catch(() => {});
-
-      return { stopReason: 'end_turn' };
+      throw Object.assign(new Error(acpErr.message), { code: acpErr.code });
     } finally {
       this._abortControllers.delete(sessionId);
     }
@@ -367,6 +379,12 @@ export class GoodVibesAgent implements Agent {
    */
   async setSessionMode(params: schema.SetSessionModeRequest): Promise<void> {
     await this.sessions.setMode(params.sessionId, modeFromConfigValue(params.modeId));
+
+    // ISS-011: Emit current_mode session update per ACP spec
+    await this.conn.sessionUpdate({
+      sessionId: params.sessionId,
+      update: { sessionUpdate: 'current_mode' as any, currentModeId: params.modeId } as schema.SessionUpdate,
+    }).catch(() => {});
   }
 
   // -------------------------------------------------------------------------

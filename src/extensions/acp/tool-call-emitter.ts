@@ -24,11 +24,14 @@ export class ToolCallEmitter {
   /**
    * Emit a tool_call session update to announce a new phase.
    *
+   * The initial status is always 'pending' per ACP spec. To transition to
+   * other statuses, use {@link emitToolCallUpdate}.
+   *
    * @param sessionId   - ACP session ID
    * @param toolCallId  - Stable ID for this tool call (use crypto.randomUUID())
    * @param name        - Tool name (e.g. 'goodvibes_work')
    * @param title       - Human-readable title
-   * @param status      - Initial status ('pending' | 'in_progress')
+   * @param kind        - Tool call kind (default: 'other')
    * @param meta        - Optional _meta payload for structured data
    */
   async emitToolCall(
@@ -36,13 +39,14 @@ export class ToolCallEmitter {
     toolCallId: string,
     name: string,
     title: string,
-    status: acp.ToolCallStatus,
+    kind: acp.ToolKind = 'other',
     meta?: Record<string, unknown>,
   ): Promise<void> {
     const toolCall: acp.ToolCall = {
       toolCallId,
       title,
-      status,
+      kind,
+      status: 'pending',
       ...(meta ? { _meta: meta } : {}),
     };
 

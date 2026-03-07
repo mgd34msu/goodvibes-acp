@@ -79,6 +79,11 @@ export function buildConfigOptions(
     currentValue: currentModel,
     options: [
       {
+        value: 'claude-sonnet-4-6',
+        name: 'Claude Sonnet 4.6',
+        description: 'Latest Sonnet model with balanced performance.',
+      },
+      {
         value: 'claude-opus-4-6',
         name: 'Claude Opus 4.6',
         description: 'Most capable model for complex tasks.',

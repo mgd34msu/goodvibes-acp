@@ -14,20 +14,10 @@
 /**
  * Categories of actions that can be gated by the permission system.
  * Maps to ACP's `permission.type` string field on the wire.
+ *
+ * ACP spec-defined values: 'fs' | 'shell' | 'mcp' | 'extension'
  */
-export type PermissionType =
-  | 'tool_call'
-  | 'file_write'
-  | 'file_read'
-  | 'command_execute'
-  | 'network_access';
-
-// ---------------------------------------------------------------------------
-// PermissionStatus
-// ---------------------------------------------------------------------------
-
-/** Result of a permission check — granted or denied. */
-export type PermissionStatus = 'granted' | 'denied';
+export type PermissionType = 'fs' | 'shell' | 'mcp' | 'extension';
 
 // ---------------------------------------------------------------------------
 // PermissionRequest
@@ -40,15 +30,15 @@ export type PermissionStatus = 'granted' | 'denied';
 export type PermissionRequest = {
   /** Categorizes the action (maps to ACP permission.type) */
   type: PermissionType;
-  /** Optional: tool name when type is 'tool_call' */
+  /** ACP session identifier — required on the wire, optional for internal callers */
+  sessionId?: string;
+  /** Optional: tool name when type is 'mcp' */
   toolName?: string;
   /** Short label for UI display */
   title: string;
   /** Full description of what will happen */
   description: string;
-  /** Optional structured arguments preview */
-  arguments?: Record<string, unknown>;
-  /** Optional extensibility metadata */
+  /** Optional extensibility metadata (use instead of arguments for tool input preview) */
   _meta?: Record<string, unknown>;
 };
 
@@ -58,7 +48,8 @@ export type PermissionRequest = {
 
 /** The outcome of a permission check. */
 export type PermissionResult = {
-  status: PermissionStatus;
+  /** True when the action was approved, false when denied. */
+  granted: boolean;
   /** Optional explanation, present when denied */
   reason?: string;
 };

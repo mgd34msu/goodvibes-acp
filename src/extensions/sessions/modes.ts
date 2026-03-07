@@ -109,3 +109,33 @@ export function getModeConfig(modeName: string): ModeConfig {
   const known = modeName as ModeName;
   return MODE_DEFINITIONS[known] ?? MODE_DEFINITIONS['justvibes'];
 }
+
+// ---------------------------------------------------------------------------
+// toSessionModeState
+// ---------------------------------------------------------------------------
+
+/**
+ * Convert the current mode into the ACP session/new response `modes` shape.
+ *
+ * Intended usage (in agent.ts newSession() response):
+ * ```ts
+ * const modeState = toSessionModeState(session.config.mode);
+ * // → { currentModeId, availableModes }
+ * ```
+ *
+ * @param currentMode - The active ModeName for this session
+ * @returns An object with `currentModeId` and `availableModes` for the wire response
+ */
+export function toSessionModeState(currentMode: ModeName): {
+  currentModeId: string;
+  availableModes: Array<{ id: string; name: string; description: string }>;
+} {
+  return {
+    currentModeId: currentMode,
+    availableModes: Object.entries(MODE_DEFINITIONS).map(([id, config]) => ({
+      id,
+      name: config.displayName,
+      description: config.description,
+    })),
+  };
+}

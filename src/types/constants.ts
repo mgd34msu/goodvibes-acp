@@ -111,3 +111,22 @@ export const WRFC_TOOL_NAMES = {
 
 /** Type of the WRFC_TOOL_NAMES constant */
 export type WRFCToolName = (typeof WRFC_TOOL_NAMES)[keyof typeof WRFC_TOOL_NAMES];
+
+// ---------------------------------------------------------------------------
+// JSON-RPC 2.0 error codes
+// ---------------------------------------------------------------------------
+
+/**
+ * Standard JSON-RPC 2.0 error codes.
+ * See: https://www.jsonrpc.org/specification#error_object
+ */
+export const JSON_RPC_ERROR_CODES = {
+  PARSE_ERROR: -32700,
+  INVALID_REQUEST: -32600,
+  METHOD_NOT_FOUND: -32601,
+  INVALID_PARAMS: -32602,
+  INTERNAL_ERROR: -32603,
+} as const;
+
+/** Type of the JSON_RPC_ERROR_CODES constant */
+export type JsonRpcErrorCode = (typeof JSON_RPC_ERROR_CODES)[keyof typeof JSON_RPC_ERROR_CODES];

@@ -117,6 +117,10 @@ export type ReadOptions = {
   encoding?: string;
   /** Read from editor buffer if available (default: true) */
   preferBuffer?: boolean;
+  /** Line number to start reading from (1-based, ACP spec) */
+  line?: number;
+  /** Maximum number of lines to read (ACP spec) */
+  limit?: number;
 };
 
 /** Options for writing a text file via ITextFileAccess */
@@ -230,13 +234,23 @@ export interface ITextFileAccess {
  * For user-visible operations (build, test, deploy).
  * precision_exec bypasses this for internal operations.
  */
+/** Options for creating a terminal process */
+export type TerminalCreateOptions = {
+  /** The command to execute */
+  command?: string;
+  /** Environment variables to set */
+  env?: Record<string, string>;
+  /** Working directory (absolute path) */
+  cwd?: string;
+};
+
 export interface ITerminal {
   /** Create a new terminal process and return its handle */
-  create(command: string, args?: string[]): Promise<TerminalHandle>;
-  /** Get the current output of a terminal */
-  output(handle: TerminalHandle): Promise<string>;
+  create(opts: TerminalCreateOptions): Promise<TerminalHandle>;
+  /** Get the current output and exit code of a terminal */
+  output(handle: TerminalHandle, timeout?: number): Promise<{ output: string; exitCode: number | null }>;
   /** Wait for the terminal process to exit */
-  waitForExit(handle: TerminalHandle): Promise<ExitResult>;
+  waitForExit(handle: TerminalHandle, timeout?: number): Promise<ExitResult>;
   /** Forcibly kill the terminal process */
   kill(handle: TerminalHandle): Promise<void>;
   /** Release terminal resources and clean up (kills process if running) */

@@ -57,6 +57,9 @@ export type McpCallResult = {
  * - MCP protocol handshake (initialize + initialized notification)
  * - tools/list and tools/call
  */
+// Default timeout for MCP JSON-RPC requests
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+
 export class McpClient extends EventEmitter {
   private readonly _process: ChildProcess;
   private _idCounter = 0;
@@ -66,6 +69,7 @@ export class McpClient extends EventEmitter {
   }>();
   private _ready = false;
   private _closed = false;
+  private _serverCapabilities: Record<string, unknown> | undefined = undefined;
 
   constructor(process: ChildProcess) {
     super();
@@ -117,14 +121,21 @@ export class McpClient extends EventEmitter {
    * Must be called before listing or calling tools.
    */
   async initialize(): Promise<void> {
-    await this._request('initialize', {
+    const result = await this._request('initialize', {
       protocolVersion: '2024-11-05',
       capabilities: { tools: {} },
       clientInfo: { name: 'goodvibes', version: '0.1.0' },
-    });
+    }) as { capabilities?: Record<string, unknown> };
+    // Capture server capabilities from the handshake response
+    this._serverCapabilities = result.capabilities;
     // Send the initialized notification (fire-and-forget)
     this._notify('notifications/initialized', {});
     this._ready = true;
+  }
+
+  /** Server capabilities returned during the initialize handshake */
+  get serverCapabilities(): Record<string, unknown> | undefined {
+    return this._serverCapabilities;
   }
 
   /**
@@ -166,14 +177,25 @@ export class McpClient extends EventEmitter {
   // Private helpers
   // -------------------------------------------------------------------------
 
-  private _request(method: string, params: unknown): Promise<unknown> {
+  private _request(
+    method: string,
+    params: unknown,
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
+  ): Promise<unknown> {
     return new Promise((resolve, reject) => {
       if (this._closed) {
         reject(new Error('MCP client is closed'));
         return;
       }
       const id = ++this._idCounter;
-      this._pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this._pending.delete(id);
+        reject(new Error(`MCP request timeout after ${timeoutMs}ms: ${method}`));
+      }, timeoutMs);
+      this._pending.set(id, {
+        resolve: (value) => { clearTimeout(timer); resolve(value); },
+        reject: (reason) => { clearTimeout(timer); reject(reason); },
+      });
       const msg: JsonRpcRequest = { jsonrpc: '2.0', id, method, params };
       this._process.stdin!.write(JSON.stringify(msg) + '\n', 'utf8');
     });

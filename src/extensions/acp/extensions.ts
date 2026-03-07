@@ -11,23 +11,28 @@ import { StateStore } from '../../core/state-store.js';
 import { Registry } from '../../core/registry.js';
 import { HealthCheck } from '../lifecycle/health.js';
 import { AgentTracker } from '../agents/tracker.js';
+import type { AgentSideConnection } from '@agentclientprotocol/sdk';
 import { EventRecorder } from './event-recorder.js';
 
 /** Shared version for all _meta fields */
 const META_VERSION = '0.1.0';
 
 /** Standard _meta appended to all responses */
-const META = { version: META_VERSION } as const;
+const META = { '_goodvibes/version': META_VERSION } as const;
 
 /**
  * Handles all _goodvibes/* method calls.
  *
  * Methods:
- *   _goodvibes/status     — runtime health overview
  *   _goodvibes/state      — full state snapshot
  *   _goodvibes/events     — recent event stream
  *   _goodvibes/agents     — active agent list
  *   _goodvibes/analytics  — token usage and metrics
+ *
+ * Note: _goodvibes/status is a push notification (agent → client),
+ * not a request handler. Use pushStatus() instead.
+ *
+ * Agent.extMethod() should delegate to this.handle() for all _goodvibes/* methods
  */
 export class GoodVibesExtensions {
   constructor(
@@ -46,14 +51,17 @@ export class GoodVibesExtensions {
   /**
    * Dispatch a _goodvibes/* method call.
    *
-   * @param method - The full method name, e.g. "_goodvibes/status"
+   * Agent.extMethod() should delegate to this.handle() for all _goodvibes/* methods
+   *
+   * Note: _goodvibes/status is NOT handled here — it is a push notification
+   * (agent → client). Use pushStatus() to emit it.
+   *
+   * @param method - The full method name, e.g. "_goodvibes/state"
    * @param params - Optional parameters (method-specific)
    * @returns Response object (always includes _meta)
    */
   async handle(method: string, params?: unknown): Promise<unknown> {
     switch (method) {
-      case '_goodvibes/status':
-        return this._status();
       case '_goodvibes/state':
         return this._state();
       case '_goodvibes/events':
@@ -68,7 +76,7 @@ export class GoodVibesExtensions {
   }
 
   // ---------------------------------------------------------------------------
-  // _goodvibes/status
+  // _goodvibes/status (push notification — agent → client)
   // ---------------------------------------------------------------------------
 
   private _status(): unknown {
@@ -302,6 +310,35 @@ export class GoodVibesExtensions {
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
+
+  /**
+   * Push a _goodvibes/status notification to the client.
+   *
+   * This is a push notification (agent → client) triggered on WRFC phase changes.
+   * The agent layer should call this method rather than routing through handle().
+   *
+   * @param conn           - The active AgentSideConnection to push through
+   * @param sessionId      - The session to notify
+   * @param phase          - Current WRFC phase label (e.g. "write", "review")
+   * @param completedSteps - Number of steps completed so far
+   * @param totalSteps     - Total number of steps expected
+   */
+  async pushStatus(
+    conn: AgentSideConnection,
+    sessionId: string,
+    phase: string,
+    completedSteps: number,
+    totalSteps: number,
+  ): Promise<void> {
+    const health = this._status();
+    await conn.extNotification('_goodvibes/status', {
+      ...(health as Record<string, unknown>),
+      phase,
+      completedSteps,
+      totalSteps,
+      sessionId,
+    });
+  }
 
   /**
    * Flatten the runtime config into a plain Record.

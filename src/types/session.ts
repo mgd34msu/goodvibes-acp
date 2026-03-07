@@ -26,21 +26,32 @@ export type SessionMode = 'vibecoding' | 'justvibes' | 'sandbox' | 'plan';
 // Session configuration
 // ---------------------------------------------------------------------------
 
-/** MCP server connection definition */
-export type MCPServerConfig = {
-  /** Server name / identifier */
-  name: string;
-  /** Transport type */
-  transport: 'stdio' | 'tcp' | 'websocket';
-  /** Command to spawn (for stdio transport) */
-  command?: string;
-  /** Arguments for the command */
-  args?: string[];
-  /** Hostname (for TCP/WS transport) */
-  host?: string;
-  /** Port (for TCP/WS transport) */
-  port?: number;
-};
+/**
+ * MCP server connection definition.
+ *
+ * ACP spec discriminated union:
+ * - stdio: spawn a local subprocess (`command`, optional `args`, optional `env`)
+ * - http/sse: connect to a remote HTTP/SSE endpoint (`url`, optional `headers`)
+ */
+export type MCPServerConfig =
+  | {
+      /** Server name / identifier */
+      name: string;
+      /** Executable command to spawn */
+      command: string;
+      /** Command-line arguments */
+      args?: string[];
+      /** Additional environment variables for the subprocess */
+      env?: Record<string, string>;
+    }
+  | {
+      /** Server name / identifier */
+      name: string;
+      /** HTTP or SSE endpoint URL */
+      url: string;
+      /** Optional HTTP headers (e.g. Authorization) */
+      headers?: Record<string, string>;
+    };
 
 /** Static configuration for a session */
 export type SessionConfig = {
@@ -57,7 +68,7 @@ export type SessionConfig = {
 };
 
 /** The runtime value of a config option */
-export type SessionConfigOptionValue = string | boolean | number;
+export type SessionConfigOptionValue = string;
 
 // ---------------------------------------------------------------------------
 // Session context

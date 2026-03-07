@@ -24,9 +24,10 @@ import type { AgentProgressEvent } from '../../types/agent.js';
  * Bridges AgentLoop progress events to ACP tool_call session updates.
  *
  * Each tool execution becomes a pair of ACP updates:
- *   tool_start  → tool_call      (status: in_progress)
- *   tool_complete → tool_call_update (status: completed)
- *   tool_error    → tool_call_update (status: failed)
+ *   tool_start    → tool_call        (status: pending)
+ *                 → tool_call_update  (status: in_progress)
+ *   tool_complete → tool_call_update  (status: completed)
+ *   tool_error    → tool_call_update  (status: failed)
  *
  * The emitter is resolved lazily via a getter so this bridge can be
  * constructed before the ACP connection exists.
@@ -58,8 +59,10 @@ export class McpToolCallBridge {
   makeProgressHandler(
     sessionId: string,
   ): (event: AgentProgressEvent) => void {
-    // Per-invocation map: namespaced tool name → ACP toolCallId
-    const activeIds = new Map<string, string>();
+    // Per-invocation map: namespaced tool name → FIFO queue of ACP toolCallIds.
+    // A queue (not a single value) is required so that concurrent calls to the
+    // same tool name do not overwrite each other.
+    const activeIds = new Map<string, string[]>();
 
     return (event: AgentProgressEvent): void => {
       const emitter = this._getEmitter();
@@ -67,52 +70,67 @@ export class McpToolCallBridge {
 
       if (event.type === 'tool_start') {
         const toolCallId = randomUUID();
-        activeIds.set(event.toolName, toolCallId);
+        const queue = activeIds.get(event.toolName) ?? [];
+        queue.push(toolCallId);
+        activeIds.set(event.toolName, queue);
 
         // Derive a human-readable title from the namespaced tool name.
         // e.g. 'mcp__filesystem__read_file' → 'filesystem: read_file'
         const title = _formatToolTitle(event.toolName);
 
+        // Announce the tool call with 'pending', then immediately transition
+        // to 'in_progress' per ACP lifecycle requirements.
         emitter
           .emitToolCall(
             sessionId,
             toolCallId,
             event.toolName,
             title,
-            'in_progress',
+            'other',
             { '_goodvibes/turn': event.turn },
+          )
+          .then(() =>
+            emitter.emitToolCallUpdate(sessionId, toolCallId, 'in_progress'),
           )
           .catch(() => {});
         return;
       }
 
       if (event.type === 'tool_complete') {
-        const toolCallId = activeIds.get(event.toolName);
+        const queue = activeIds.get(event.toolName);
+        const toolCallId = queue?.shift();
         if (!toolCallId) return;
-        activeIds.delete(event.toolName);
+        if (queue?.length === 0) activeIds.delete(event.toolName);
 
         emitter
           .emitToolCallUpdate(
             sessionId,
             toolCallId,
             'completed',
-            { '_goodvibes/durationMs': event.durationMs },
+            {
+              '_goodvibes/durationMs': event.durationMs,
+              '_goodvibes/content': [{ type: 'text', text: '' }],
+            },
           )
           .catch(() => {});
         return;
       }
 
       if (event.type === 'tool_error') {
-        const toolCallId = activeIds.get(event.toolName);
+        const queue = activeIds.get(event.toolName);
+        const toolCallId = queue?.shift();
         if (!toolCallId) return;
-        activeIds.delete(event.toolName);
+        if (queue?.length === 0) activeIds.delete(event.toolName);
 
         emitter
           .emitToolCallUpdate(
             sessionId,
             toolCallId,
             'failed',
-            { '_goodvibes/error': event.error },
+            {
+              '_goodvibes/error': event.error,
+              '_goodvibes/content': [{ type: 'text', text: String(event.error ?? 'Unknown error') }],
+            },
           )
           .catch(() => {});
         return;

@@ -29,23 +29,23 @@ import type { PermissionRequest, PermissionResult, PermissionPolicy, PermissionT
  */
 export const MODE_POLICIES: Record<string, PermissionPolicy> = {
   justvibes: {
-    autoApprove: ['tool_call', 'file_read', 'file_write', 'command_execute', 'network_access'],
+    autoApprove: ['fs', 'shell', 'mcp', 'extension'],
     alwaysDeny: [],
     promptForUnknown: false,
   },
   vibecoding: {
-    autoApprove: ['tool_call', 'file_read', 'file_write', 'command_execute'],
+    autoApprove: ['fs', 'shell', 'mcp'],
     alwaysDeny: [],
     promptForUnknown: true,
   },
   plan: {
-    autoApprove: ['file_read'],
-    alwaysDeny: ['command_execute'],
+    autoApprove: ['fs'],
+    alwaysDeny: ['shell'],
     promptForUnknown: true,
   },
   sandbox: {
-    autoApprove: ['tool_call', 'file_read'],
-    alwaysDeny: ['network_access'],
+    autoApprove: ['mcp', 'fs'],
+    alwaysDeny: ['extension'],
     promptForUnknown: true,
   },
 };
@@ -99,6 +99,13 @@ function isGranted(outcome: acp.RequestPermissionOutcome): boolean {
  * 4. Prompt client via conn.requestPermission()
  *
  * If the client request throws (e.g., session cancelled), the action is denied.
+ *
+ * @integration ISS-016 — This class must be wired into the agent tool-execution
+ * lifecycle (hooks/registrar.ts) so that `check()` is called before each tool
+ * invocation.  Until that wiring exists, permission checks are never enforced.
+ *
+ * @todo ISS-015 — PermissionGate is not yet instantiated or used.  Wire it into
+ * the agent lifecycle via hooks/registrar.ts before shipping.
  */
 export class PermissionGate {
   constructor(
@@ -118,17 +125,17 @@ export class PermissionGate {
 
     // 1. Auto-approve
     if (this.policy.autoApprove.includes(type)) {
-      return { status: 'granted' };
+      return { granted: true };
     }
 
     // 2. Always-deny
     if (this.policy.alwaysDeny.includes(type)) {
-      return { status: 'denied', reason: 'Policy: always denied' };
+      return { granted: false, reason: 'Policy: always denied' };
     }
 
     // 3. Silent pass-through for unknown types when prompting is disabled
     if (!this.policy.promptForUnknown) {
-      return { status: 'granted' };
+      return { granted: true };
     }
 
     // 4. Prompt the ACP client using the SDK's structured permission request
@@ -141,17 +148,24 @@ export class PermissionGate {
           toolCallId,
           title: request.title,
           status: 'pending',
-          rawInput: request.arguments ?? null,
+          rawInput: request._meta?.rawInput ?? null,
           ...(request._meta ? { _meta: request._meta } : {}),
         },
       });
       const granted = isGranted(response.outcome);
       return {
-        status: granted ? 'granted' : 'denied',
+        granted,
         ...(granted ? {} : { reason: 'Permission denied by user' }),
       };
-    } catch {
-      return { status: 'denied', reason: 'Permission request failed' };
+    } catch (err) {
+      // Distinguish user cancellation from unexpected errors
+      const isCancelled =
+        err instanceof Error &&
+        (err.name === 'AbortError' || (err instanceof DOMException && err.name === 'AbortError'));
+      return {
+        granted: false,
+        reason: isCancelled ? 'cancelled' : 'Permission request failed',
+      };
     }
   }
 }

@@ -59,7 +59,7 @@ export class AgentEventBridge {
             toolCallId,
             'goodvibes_agent',
             title,
-            'pending',
+            'other',
             {
               '_goodvibes/agentId': metadata.id,
               '_goodvibes/agentType': metadata.type,
@@ -81,9 +81,10 @@ export class AgentEventBridge {
 
         const toolCallId = `goodvibes_agent_${agentId}`;
         const status: acp.ToolCallStatus =
-          to === 'running' ? 'in_progress'
-          : to === 'completed' ? 'completed'
-          : to === 'failed' || to === 'cancelled' ? 'failed'
+          to === 'running'    ? 'in_progress'
+          : to === 'completed'  ? 'completed'
+          : to === 'cancelled'  ? 'failed'
+          : to === 'failed'     ? 'failed'
           : 'in_progress';
 
         this._emitter

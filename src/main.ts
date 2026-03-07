@@ -131,9 +131,12 @@ AnalyticsPlugin.register(registry);
 ProjectPlugin.register(registry);
 FrontendPlugin.register(registry);
 
+const minReviewScore = config.get<number>('wrfc.minReviewScore') ?? 9.5;
+const maxAttempts = config.get<number>('wrfc.maxFixAttempts') ?? 3;
+
 const wrfcConfig: WRFCConfig = {
-  minReviewScore: 9.5,
-  maxAttempts: 3,
+  minReviewScore,
+  maxAttempts,
   enableQualityGates: true,
 };
 
@@ -236,9 +239,9 @@ const wrfcAdapter = {
         id: 'registry-reviewer',
         capabilities: [],
         async review(workResult: WorkResult): Promise<ReviewResult> {
-          const reviewers = registry.getAll<IReviewer>('reviewer');
-          const reviewer = reviewers.values().next().value;
+          const reviewer = registry.get<IReviewer>('reviewer');
           if (!reviewer) {
+            console.error('[goodvibes-acp] WRFC: No reviewer registered — returning score 10 fallback');
             return {
               sessionId: workResult.sessionId,
               score: 10,
@@ -264,6 +267,7 @@ const wrfcAdapter = {
       // toolCallEmitter is lazily resolved — it is assigned after conn is created below.
       callbacks: (() => {
         const ids: Record<string, string> = {};
+        let attempt = 0;
         const cb: WRFCCallbacks = {
           onStateChange: (_from, to) => {
             const phase =
@@ -272,7 +276,17 @@ const wrfcAdapter = {
               : to === 'fixing' ? 'goodvibes_fix'
               : null;
             if (!phase || !toolCallEmitter) return;
+            const gvPhase =
+              phase === 'goodvibes_work' ? 'work'
+              : phase === 'goodvibes_review' ? 'review'
+              : 'fix';
+            if (phase === 'goodvibes_work') attempt++;
             ids[phase] = crypto.randomUUID();
+            const announceMeta: Record<string, unknown> = {
+              '_goodvibes/attempt': attempt,
+              '_goodvibes/phase': gvPhase,
+            };
+            // Step 1: announce with status 'pending'
             toolCallEmitter.emitToolCall(
               params.sessionId,
               ids[phase],
@@ -280,28 +294,57 @@ const wrfcAdapter = {
               phase === 'goodvibes_work' ? 'Running task'
                 : phase === 'goodvibes_review' ? 'Reviewing output'
                 : 'Applying fixes',
-              'in_progress',
-            ).catch(() => {});
+              'other',
+              announceMeta,
+            ).then(() => {
+              // Step 2: transition to 'in_progress'
+              if (!toolCallEmitter) return;
+              return toolCallEmitter.emitToolCallUpdate(
+                params.sessionId,
+                ids[phase],
+                'in_progress',
+                announceMeta,
+              );
+            }).catch(() => {});
           },
           onWorkComplete: () => {
             const id = ids['goodvibes_work'];
-            if (!id || !toolCallEmitter) return;
-            toolCallEmitter.emitToolCallUpdate(params.sessionId, id, 'completed').catch(() => {});
-          },
-          onReviewComplete: (result) => {
-            const id = ids['goodvibes_review'];
             if (!id || !toolCallEmitter) return;
             toolCallEmitter.emitToolCallUpdate(
               params.sessionId,
               id,
               'completed',
-              { score: result.score },
+              { '_goodvibes/attempt': attempt, '_goodvibes/phase': 'work' },
+            ).catch(() => {});
+          },
+          onReviewComplete: (result) => {
+            const id = ids['goodvibes_review'];
+            if (!id || !toolCallEmitter) return;
+            const reviewMeta: Record<string, unknown> = {
+              '_goodvibes/score': result.score,
+              '_goodvibes/minimumScore': wrfcConfig.minReviewScore,
+              '_goodvibes/phase': 'review',
+              '_goodvibes/attempt': attempt,
+            };
+            if (result.dimensions) {
+              reviewMeta['_goodvibes/dimensions'] = result.dimensions;
+            }
+            toolCallEmitter.emitToolCallUpdate(
+              params.sessionId,
+              id,
+              'completed',
+              reviewMeta,
             ).catch(() => {});
           },
           onFixComplete: () => {
             const id = ids['goodvibes_fix'];
             if (!id || !toolCallEmitter) return;
-            toolCallEmitter.emitToolCallUpdate(params.sessionId, id, 'completed').catch(() => {});
+            toolCallEmitter.emitToolCallUpdate(
+              params.sessionId,
+              id,
+              'completed',
+              { '_goodvibes/attempt': attempt, '_goodvibes/phase': 'fix' },
+            ).catch(() => {});
           },
         };
         return cb;
@@ -443,7 +486,7 @@ if (mode === 'daemon') {
 // Suppress unused variable warnings for wired-but-unreferenced instances
 void agentCoordinator;
 void directiveQueue;
-void config;
+// config is wired into wrfcConfig above
 void hookEngine;
 void healthCheck;
 void wrfcHandlers;
