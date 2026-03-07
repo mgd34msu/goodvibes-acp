@@ -5,10 +5,10 @@
  * Zero external npm dependencies.
  */
 
-// L0 type imports — relative paths used (path aliases may not resolve during build)
-// These types are defined by the parallel L0 agent; stubs here for compilation.
-// Replace with: import type { EventRecord, GoodVibesEvent, EventPayloadMap } from '../types/events.js';
-// Replace with: import type { GoodVibesError } from '../types/errors.js';
+// L0 types note: L0 exports Event<T> (src/types/events.ts) which has a different shape
+// from the L1 EventRecord<T> used internally here (L1 adds 'id' field and uses 'sessionId'
+// at the record level). Keeping local definitions below.
+// TODO: Align EventRecord shape with L0 Event<T> in a future refactor.
 
 /** Represents a single recorded event in history */
 export interface EventRecord<TPayload = unknown> {

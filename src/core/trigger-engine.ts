@@ -10,8 +10,9 @@ import type { Registry } from './registry.js';
 
 /**
  * A trigger definition that maps event conditions to handler actions.
- * Imported from L0 trigger types once available.
- * Replace with: import type { TriggerDefinition, TriggerContext } from '../types/trigger.js';
+ * TODO: L0 src/types/trigger.ts defines TriggerDefinition with a different shape
+ * (condition/action objects) vs this flat shape (eventPattern, handlerKey, etc.).
+ * Keeping local definition until shapes are aligned.
  */
 export interface TriggerDefinition {
   /** Unique trigger identifier */
@@ -54,7 +55,8 @@ export interface TriggerContext {
 /**
  * Interface for trigger handler implementations (registered in L1 Registry).
  * Implemented by L3 plugins and registered at startup.
- * Replace with: import type { ITriggerHandler } from '../types/registry.js';
+ * TODO: L0 src/types/registry.ts defines ITriggerHandler using L0's TriggerDefinition/TriggerContext
+ * shapes which differ from L1's local shapes. Keeping local definition until shapes are aligned.
  */
 export interface ITriggerHandler {
   /** Check if this handler can process the given trigger */

@@ -11,8 +11,9 @@ import type { Disposable } from './event-bus.js';
 
 /**
  * Runtime configuration shape.
- * Imported from L0 config types once available.
- * Replace with: import type { RuntimeConfig } from '../types/config.js';
+ * TODO: L0 src/types/config.ts defines RuntimeConfig with a different flat shape
+ * (mode, port, logLevel) vs this nested shape (runtime.mode, logging.level, etc.).
+ * Keeping local definition until shapes are aligned.
  */
 export interface RuntimeConfig {
   /** Runtime mode: 'subprocess' | 'daemon' */
