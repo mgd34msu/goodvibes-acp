@@ -11,7 +11,7 @@
 // ---------------------------------------------------------------------------
 
 /** A single review dimension with its weight and description */
-export type ReviewDimension = {
+export type ReviewDimensionConfig = {
   /** Dimension name (e.g. "correctness", "type-safety") */
   name: string;
   /** Weight in overall score (0–1). All weights sum to 1.0. */
@@ -21,7 +21,7 @@ export type ReviewDimension = {
 };
 
 /** The 10 standard review dimensions used by CodeReviewer */
-export const REVIEW_DIMENSIONS: ReviewDimension[] = [
+export const REVIEW_DIMENSIONS: ReviewDimensionConfig[] = [
   { name: 'correctness',     weight: 0.15, description: 'Does the code work correctly?' },
   { name: 'architecture',    weight: 0.12, description: 'Proper layer boundaries and patterns?' },
   { name: 'error-handling',  weight: 0.12, description: 'Robust error handling, no-throw contracts?' },

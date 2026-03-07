@@ -137,7 +137,13 @@ export class AgentTracker {
 
   /** Number of agents currently in `'spawned'` or `'running'` status. */
   activeCount(): number {
-    return this.active().length;
+    return this._store
+      .keys(NS)
+      .filter((key) => {
+        const m = this._store.get<AgentMetadata>(NS, key);
+        return m?.status === 'spawned' || m?.status === 'running';
+      })
+      .length;
   }
 
   // ---------------------------------------------------------------------------

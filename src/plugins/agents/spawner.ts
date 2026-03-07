@@ -47,6 +47,8 @@ type AgentState = {
   finishedAt?: number;
   /** Pending timer handle for stub simulation (replaces ChildProcess in the real impl) */
   timer?: ReturnType<typeof setTimeout>;
+  /** Timeout timer handle — cleared when agent reaches a terminal state */
+  timeoutTimer?: ReturnType<typeof setTimeout>;
   /** Accumulated resolvers waiting on result() */
   resolvers: Array<(result: AgentResult) => void>;
   /** Accumulated rejecters waiting on result() */
@@ -99,7 +101,7 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
     }, completionDelayMs);
 
     // Schedule timeout cancellation
-    const timeoutTimer = setTimeout(() => {
+    state.timeoutTimer = setTimeout(() => {
       const s = this._agents.get(id);
       if (s && s.status === 'running') {
         this._timeout(id);
@@ -107,8 +109,8 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
     }, timeoutMs);
 
     // Ensure the timeout timer doesn't prevent Node from exiting
-    if (typeof timeoutTimer.unref === 'function') {
-      timeoutTimer.unref();
+    if (typeof state.timeoutTimer.unref === 'function') {
+      state.timeoutTimer.unref();
     }
 
     return handle;
@@ -159,6 +161,12 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
       state.timer = undefined;
     }
 
+    // Clear the timeout timer
+    if (state.timeoutTimer !== undefined) {
+      clearTimeout(state.timeoutTimer);
+      state.timeoutTimer = undefined;
+    }
+
     state.status = 'cancelled';
     state.finishedAt = Date.now();
 
@@ -187,6 +195,12 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
     state.finishedAt = Date.now();
     state.output = `[stub] Agent ${state.config.type} completed task: ${state.config.task}`;
     state.timer = undefined;
+
+    // Clear the timeout timer since the agent completed normally
+    if (state.timeoutTimer !== undefined) {
+      clearTimeout(state.timeoutTimer);
+      state.timeoutTimer = undefined;
+    }
 
     this._flushResolvers(state);
   }

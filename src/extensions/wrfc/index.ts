@@ -14,3 +14,5 @@ export { createWRFCMachine, WRFC_EVENTS, WRFC_TERMINAL_STATES } from './machine.
 export type { WRFCEvent } from './machine.js';
 export { WRFCOrchestrator } from './orchestrator.js';
 export type { WRFCCallbacks, WRFCRunParams } from './orchestrator.js';
+export { WRFCHandlers } from './handlers.js';
+export type { WRFCHandlerOptions } from './handlers.js';

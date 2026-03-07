@@ -147,8 +147,12 @@ export class AgentCoordinator {
       (res) => {
         this._tracker.updateStatus(handle.id, res.status);
       },
-      () => {
+      (err: unknown) => {
         this._tracker.updateStatus(handle.id, 'failed');
+        this._bus.emit('agent:spawn-error', {
+          agentId: handle.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
       },
     );
 

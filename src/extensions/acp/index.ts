@@ -15,3 +15,6 @@ export {
 export type { GoodVibesMode } from './config-adapter.js';
 export { ACP_ERROR_CODES, toAcpError } from './errors.js';
 export type { AcpErrorCode, AcpErrorShape } from './errors.js';
+export { createTransport, createStdioTransport } from './transport.js';
+export type { StdioTransportOptions, TcpTransportOptions, WebSocketTransportOptions, TransportOptions, AcpStream } from './transport.js';
+export { SessionAdapter } from './session-adapter.js';

@@ -60,7 +60,7 @@ function buildId(prefix: string): string {
     .toISOString()
     .slice(11, 19)
     .replace(/:/g, '');
-  return `${prefix}_${date}_${time}`;
+  return `${prefix}_${date}_${time}_${Math.random().toString(36).slice(2, 6)}`;
 }
 
 /** Build an empty memory store */
@@ -283,7 +283,7 @@ export class MemoryManager {
    * Set (create or update) a preference.
    * Emits `memory:preference-set`.
    */
-  setPreference(key: string, value: string, reason: string): PreferenceRecord {
+  setPreference(key: string, value: unknown, reason: string): PreferenceRecord {
     const record: PreferenceRecord = {
       key,
       value,

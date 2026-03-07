@@ -44,7 +44,10 @@ export type AgentEventType =
   | 'agent:started'
   | 'agent:completed'
   | 'agent:failed'
-  | 'agent:cancelled';
+  | 'agent:cancelled'
+  | 'agent:registered'
+  | 'agent:status-changed'
+  | 'agent:spawn-error';
 
 /** WRFC state machine event types */
 export type WRFCEventType =

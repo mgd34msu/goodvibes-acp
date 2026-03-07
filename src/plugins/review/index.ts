@@ -15,7 +15,7 @@ import { CodeFixer } from './fixer.js';
 export { CodeReviewer } from './reviewer.js';
 export { CodeFixer } from './fixer.js';
 export { REVIEW_DIMENSIONS, computeWeightedScore } from './scoring.js';
-export type { ReviewDimension, ReviewIssue, IssueSeverity } from './scoring.js';
+export type { ReviewDimensionConfig, ReviewIssue, IssueSeverity } from './scoring.js';
 
 /** Review plugin registration object */
 export const ReviewPlugin: PluginRegistration = {
