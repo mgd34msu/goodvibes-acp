@@ -23,6 +23,7 @@ import { HealthCheck } from '../lifecycle/health.js';
 import { AgentTracker } from '../agents/tracker.js';
 import { EventRecorder } from './event-recorder.js';
 import { StateStore } from '../../core/state-store.js';
+import { RUNTIME_VERSION } from '../../types/constants.js';
 
 // The protocol version this agent supports (ISS-029).
 const SUPPORTED_VERSION: number = typeof PROTOCOL_VERSION === 'number' ? PROTOCOL_VERSION : 1;
@@ -68,6 +69,25 @@ function messageChunkUpdate(
  * Uses 'session_info' discriminator per ACP spec.
  * Payload carries a text content block with the session title.
  */
+/**
+ * ISS-104: Categorize an error into an ACP stopReason when appropriate.
+ * Returns 'refusal' for deliberate content-policy refusals, null for all
+ * other errors (which should propagate as JSON-RPC errors per ISS-084).
+ */
+function toStopReason(err: unknown): schema.PromptResponse['stopReason'] | null {
+  if (
+    err instanceof Error &&
+    (
+      err.message.toLowerCase().includes('content policy') ||
+      err.message.toLowerCase().includes('refusal') ||
+      (err as Error & { code?: string }).code === 'refusal'
+    )
+  ) {
+    return 'refusal';
+  }
+  return null;
+}
+
 function sessionInfoUpdate(title: string): schema.SessionUpdate {
   return { sessionUpdate: 'session_info' as any, content: { type: 'text', text: title } as any } as schema.SessionUpdate;
 }
@@ -85,6 +105,9 @@ function sessionInfoUpdate(title: string): schema.SessionUpdate {
 export class GoodVibesAgent implements Agent {
   /** Capabilities advertised by the connected client (set in initialize) */
   private _clientCapabilities: schema.ClientCapabilities = {};
+
+  /** ISS-109: True once EventBus bridges are registered in the constructor */
+  private _bridgesReady = false;
 
   /** Per-session AbortControllers for cancellation */
   private readonly _abortControllers = new Map<string, AbortController>();
@@ -140,6 +163,9 @@ export class GoodVibesAgent implements Agent {
         });
       });
     }
+
+    // ISS-109: Mark bridges as ready after all EventBus listeners are established.
+    this._bridgesReady = true;
   }
 
   // -------------------------------------------------------------------------
@@ -172,13 +198,13 @@ export class GoodVibesAgent implements Agent {
       agentInfo: {
         name: 'goodvibes',
         title: 'GoodVibes Runtime',
-        version: '0.1.0',
+        version: RUNTIME_VERSION,
       },
       // ISS-003: Advertise no authentication required
       authMethods: [],
       agentCapabilities: {
         loadSession: true,
-        mcpCapabilities: { http: false, sse: false },
+        mcp: { http: false, sse: false },
         promptCapabilities: {
           embeddedContext: true,
           image: false,
@@ -318,6 +344,11 @@ export class GoodVibesAgent implements Agent {
    * 5. Return the stop reason
    */
   async prompt(params: schema.PromptRequest): Promise<schema.PromptResponse> {
+    // ISS-109: Guard against prompts arriving before EventBus bridges are established.
+    if (!this._bridgesReady) {
+      throw Object.assign(new Error('ACP bridges must be registered before processing prompts'), { code: -32603 });
+    }
+
     const { sessionId, prompt } = params;
 
     // Extract text from prompt blocks
@@ -389,6 +420,13 @@ export class GoodVibesAgent implements Agent {
       if (controller.signal.aborted) {
         // ISS-103: Do not emit non-spec 'finish' update; stopReason is in the return value
         return { stopReason: 'cancelled' };
+      }
+
+      // ISS-104: Categorize errors — deliberate refusals get 'refusal' stopReason;
+      // all other errors propagate as JSON-RPC errors per ISS-084.
+      const stopReason = toStopReason(err);
+      if (stopReason !== null) {
+        return { stopReason };
       }
 
       // ISS-084: Propagate internal errors as JSON-RPC errors rather than disguising as end_turn

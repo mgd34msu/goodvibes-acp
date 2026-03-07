@@ -46,6 +46,15 @@ export type ModeName = SessionMode;
  *
  * These are the authoritative defaults — individual sessions may override
  * specific fields via setConfigOption().
+ *
+ * Mode ID note: GoodVibes uses its own mode IDs (`justvibes`, `vibecoding`,
+ * `plan`, `sandbox`) rather than the illustrative IDs in ACP spec examples
+ * (`yolo`, `code`, `architect`). This is spec-compliant — `SessionModeId` is
+ * typed as `string`, so any identifier is valid. Approximate mapping:
+ *   justvibes  ≈ yolo       (standard, full guardrails)
+ *   vibecoding ≈ code       (rapid prototyping, reduced guardrails)
+ *   plan       ≈ architect  (review-before-execute)
+ *   sandbox    = custom     (isolated experimentation, no production access)
  */
 export const MODE_DEFINITIONS: Readonly<Record<ModeName, ModeConfig>> = {
   justvibes: {

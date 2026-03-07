@@ -240,6 +240,21 @@ export class SessionManager {
    *
    * Returns the full updated configOptions record so callers can reflect
    * the new state back to ACP (SetSessionConfigOption response).
+   *
+   * Storage note: configOptions is stored as a flat `Record<string, string>`
+   * rather than `ConfigOption[]`. This is intentional — the agent layer's
+   * `buildConfigOptions()` in config-adapter.ts reconstructs the full
+   * `ConfigOption[]` wire format using the stored values as `currentValue`.
+   * Custom config options beyond `mode` and `model` would need richer storage
+   * (e.g. type metadata) if added in the future.
+   *
+   * TODO(ISS-033): The `session/new` handler in agent.ts casts
+   * `params.mcpServers as unknown as MCPServerConfig[]` (line ~218) because
+   * the ACP SDK McpServer type and our internal MCPServerConfig are structurally
+   * compatible but nominally distinct. A proper adapter function should be
+   * introduced in a shared conversion module rather than relying on the cast.
+   *
+   * Emits `session:config-changed`.
    */
   async setConfigOption(
     sessionId: string,
@@ -262,6 +277,8 @@ export class SessionManager {
       updatedAt: Date.now(),
     };
     this._store.set(NS, sessionId, updated);
+
+    this._bus.emit('session:config-changed', { sessionId, key, value });
 
     return updatedOptions;
   }

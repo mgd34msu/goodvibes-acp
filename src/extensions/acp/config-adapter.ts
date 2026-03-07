@@ -19,8 +19,8 @@ export type GoodVibesMode = 'justvibes' | 'vibecoding' | 'sandbox' | 'plan';
 // Config option IDs
 // ---------------------------------------------------------------------------
 
-const CONFIG_ID_MODE = 'goodvibes.mode' as const;
-const CONFIG_ID_MODEL = 'goodvibes.model' as const;
+const CONFIG_ID_MODE = 'mode' as const;
+const CONFIG_ID_MODEL = 'model' as const;
 
 // ---------------------------------------------------------------------------
 // buildConfigOptions

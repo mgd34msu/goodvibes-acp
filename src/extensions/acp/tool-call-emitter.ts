@@ -47,7 +47,9 @@ export class ToolCallEmitter {
       title,
       kind,
       status: 'pending',
-      ...(meta ? { _meta: meta } : {}),
+      ...(meta || name
+        ? { _meta: { ...(meta ?? {}), '_goodvibes/tool_name': name } }
+        : {}),
     };
 
     await this.conn.sessionUpdate({

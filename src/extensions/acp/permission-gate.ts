@@ -27,6 +27,12 @@ import type { PermissionRequest, PermissionResult, PermissionPolicy, PermissionT
  * - **vibecoding**: Auto-approve most actions; prompt for network access.
  * - **plan**: Only auto-approve reads; deny command execution; prompt for others.
  * - **sandbox**: Auto-approve reads and tool calls; deny network; prompt for others.
+ *
+ * ACP conceptual mode equivalents (ISS-111):
+ * - `justvibes`  → yolo/auto mode (no permission gates; all actions auto-approved)
+ * - `vibecoding` → code mode (auto-approve low-risk actions; prompt for unknown)
+ * - `plan`       → ask mode (prompt for most actions; only reads pass silently)
+ * - `sandbox`    → custom restricted mode (fs/mcp auto-approved; extensions always denied)
  */
 export const MODE_POLICIES: Record<string, PermissionPolicy> = {
   justvibes: {
