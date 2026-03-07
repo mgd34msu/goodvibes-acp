@@ -4,4 +4,7 @@ dist/
 .goodvibes/.exec-output/
 .goodvibes/.overflow/
 .goodvibes/analytics/
+.goodvibes/.backups/
+.goodvibes/.exec-output/
+.goodvibes/runtime-state.json
 *.log
