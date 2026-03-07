@@ -2,6 +2,7 @@ node_modules/
 dist/
 *.tsbuildinfo
 *.log
+logs/
 
 # GoodVibes plugin state
 .goodvibes/
