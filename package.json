@@ -13,7 +13,8 @@
     "test:plugins": "bun test tests/plugins/",
     "test:integration": "bun test tests/integration/",
     "typecheck": "bun run tsc --noEmit",
-    "lint": "eslint src/ tests/",
+    "lint": "eslint src/",
+    "lint:boundaries": "eslint src/ --rule 'no-restricted-imports: error'",
     "check": "bun run typecheck && bun run lint && bun test"
   },
   "dependencies": {
@@ -21,7 +22,10 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "@typescript-eslint/eslint-plugin": "^8.56.1",
+    "@typescript-eslint/parser": "^8.56.1",
+    "eslint": "^10.0.3",
+    "typescript": "^5.7.0"
   }
 }
