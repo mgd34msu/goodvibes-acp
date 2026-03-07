@@ -4,21 +4,11 @@
  *
  * AgentSpawnerPlugin — implements IAgentSpawner from L0 registry.ts.
  *
- * -------------------------------------------------------------------------
- * STUB IMPLEMENTATION
- * -------------------------------------------------------------------------
- * This is a complete interface implementation backed by in-memory simulation.
- * Real agent subprocesses (Claude Code sessions via the Claude Agent SDK) will
- * be substituted here when the SDK integration is built. All callers interact
- * through IAgentSpawner and will be unaffected by that substitution.
+ * When an ILLMProvider is registered under 'llm-provider', spawn() drives
+ * a real AgentLoop (prompt → tool_use → execute → repeat).
  *
- * Stub behaviour:
- *   - spawn()  — creates an in-memory AgentState, immediately transitions to
- *                'running', and schedules resolution after a short delay.
- *   - result() — returns a Promise that resolves when the stub finishes.
- *   - cancel() — kills the pending timer and resolves with 'cancelled'.
- *   - status() — returns the current AgentStatus from internal state.
- * -------------------------------------------------------------------------
+ * When no ILLMProvider is registered, spawn() falls back to the timer-based
+ * stub so the interface remains usable in environments without an API key.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -29,8 +19,11 @@ import type {
   AgentStatus,
   AgentError,
 } from '../../types/agent.js';
-import type { IAgentSpawner } from '../../types/registry.js';
+import type { IAgentSpawner, ILLMProvider, IToolProvider } from '../../types/registry.js';
+import type { Registry } from '../../core/registry.js';
 import { AGENT_TYPE_CONFIGS } from './types.js';
+import { AgentLoop } from './loop.js';
+import type { AgentLoopResult } from './loop.js';
 
 // ---------------------------------------------------------------------------
 // Internal state type
@@ -45,7 +38,9 @@ type AgentState = {
   filesModified: string[];
   startedAt?: number;
   finishedAt?: number;
-  /** Pending timer handle for stub simulation (replaces ChildProcess in the real impl) */
+  /** AbortController for real AgentLoop cancellation */
+  controller?: AbortController;
+  /** Pending timer handle for stub simulation (used when no LLM provider) */
   timer?: ReturnType<typeof setTimeout>;
   /** Timeout timer handle — cleared when agent reaches a terminal state */
   timeoutTimer?: ReturnType<typeof setTimeout>;
@@ -61,6 +56,16 @@ type AgentState = {
 
 export class AgentSpawnerPlugin implements IAgentSpawner {
   private readonly _agents = new Map<string, AgentState>();
+  private readonly _registry: Registry | undefined;
+
+  /**
+   * @param registry — optional L1 Registry. When provided and an
+   * ILLMProvider is registered under 'llm-provider', spawn() creates a real
+   * AgentLoop. Otherwise falls back to the timer-based stub.
+   */
+  constructor(registry?: Registry) {
+    this._registry = registry;
+  }
 
   // -------------------------------------------------------------------------
   // spawn
@@ -94,23 +99,90 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
     state.status = 'running';
     state.startedAt = Date.now();
 
-    // Schedule stub completion — simulates the agent completing its task
-    const completionDelayMs = Math.min(timeoutMs, 100);
-    state.timer = setTimeout(() => {
-      this._complete(id);
-    }, completionDelayMs);
+    // Check whether a real LLM provider is available
+    const hasLLMProvider = this._registry?.has('llm-provider') ?? false;
 
-    // Schedule timeout cancellation
-    state.timeoutTimer = setTimeout(() => {
-      const s = this._agents.get(id);
-      if (s && s.status === 'running') {
-        this._timeout(id);
+    if (hasLLMProvider) {
+      // --- Real AgentLoop path ---
+      const llmProvider = this._registry!.get<ILLMProvider>('llm-provider');
+      const toolProviders = this._registry!.getAll<IToolProvider>('tool-provider');
+
+      const controller = new AbortController();
+      state.controller = controller;
+
+      const model = config.model ?? typeConfig.defaultModel;
+      const systemPrompt = typeConfig.systemPromptPrefix;
+
+      const loop = new AgentLoop({
+        provider: llmProvider,
+        tools: toolProviders,
+        model,
+        systemPrompt,
+        maxTurns: 50,
+        signal: controller.signal,
+      });
+
+      // Run in background — state machine fires when it settles
+      const resultPromise = loop.run(config.task);
+
+      // Schedule timeout cancellation
+      state.timeoutTimer = setTimeout(() => {
+        const s = this._agents.get(id);
+        if (s && s.status === 'running') {
+          controller.abort();
+          this._settleFromLoop(id, {
+            output: '',
+            turns: 0,
+            usage: { inputTokens: 0, outputTokens: 0 },
+            stopReason: 'error',
+            error: `Agent exceeded timeout of ${timeoutMs}ms`,
+          });
+        }
+      }, timeoutMs);
+
+      if (typeof state.timeoutTimer.unref === 'function') {
+        state.timeoutTimer.unref();
       }
-    }, timeoutMs);
 
-    // Ensure the timeout timer doesn't prevent Node from exiting
-    if (typeof state.timeoutTimer.unref === 'function') {
-      state.timeoutTimer.unref();
+      // When the loop finishes naturally, settle the state
+      resultPromise.then(
+        (loopResult) => {
+          const s = this._agents.get(id);
+          if (s && s.status === 'running') {
+            this._settleFromLoop(id, loopResult);
+          }
+        },
+        (err: unknown) => {
+          const s = this._agents.get(id);
+          if (s && s.status === 'running') {
+            this._settleFromLoop(id, {
+              output: '',
+              turns: 0,
+              usage: { inputTokens: 0, outputTokens: 0 },
+              stopReason: 'error',
+              error: String(err),
+            });
+          }
+        },
+      );
+    } else {
+      // --- Stub fallback path ---
+      const completionDelayMs = Math.min(timeoutMs, 100);
+      state.timer = setTimeout(() => {
+        this._complete(id);
+      }, completionDelayMs);
+
+      // Schedule timeout cancellation
+      state.timeoutTimer = setTimeout(() => {
+        const s = this._agents.get(id);
+        if (s && s.status === 'running') {
+          this._timeout(id);
+        }
+      }, timeoutMs);
+
+      if (typeof state.timeoutTimer.unref === 'function') {
+        state.timeoutTimer.unref();
+      }
     }
 
     return handle;
@@ -155,6 +227,11 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
       return;
     }
 
+    // Abort the real AgentLoop if present
+    if (state.controller !== undefined) {
+      state.controller.abort();
+    }
+
     // Clear the pending stub timer
     if (state.timer !== undefined) {
       clearTimeout(state.timer);
@@ -186,7 +263,37 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
   // Private helpers
   // -------------------------------------------------------------------------
 
-  /** Resolve an agent as successfully completed */
+  /** Settle state from an AgentLoopResult */
+  private _settleFromLoop(id: string, loopResult: AgentLoopResult): void {
+    const state = this._agents.get(id);
+    if (!state || state.status !== 'running') return;
+
+    // Clear timeout timer
+    if (state.timeoutTimer !== undefined) {
+      clearTimeout(state.timeoutTimer);
+      state.timeoutTimer = undefined;
+    }
+
+    state.finishedAt = Date.now();
+    state.output = loopResult.output;
+
+    if (loopResult.stopReason === 'cancelled') {
+      state.status = 'cancelled';
+    } else if (loopResult.stopReason === 'error') {
+      state.status = 'failed';
+      state.errors.push({
+        code: 'AGENT_ERROR',
+        message: loopResult.error ?? 'Unknown error',
+      });
+    } else {
+      // 'complete' or 'max_turns'
+      state.status = 'completed';
+    }
+
+    this._flushResolvers(state);
+  }
+
+  /** Resolve an agent as successfully completed (stub path) */
   private _complete(id: string): void {
     const state = this._agents.get(id);
     if (!state || state.status !== 'running') return;
@@ -205,7 +312,7 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
     this._flushResolvers(state);
   }
 
-  /** Fail an agent due to timeout */
+  /** Fail an agent due to timeout (stub path) */
   private _timeout(id: string): void {
     const state = this._agents.get(id);
     if (!state || state.status !== 'running') return;

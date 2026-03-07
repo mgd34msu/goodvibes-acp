@@ -1,9 +1,15 @@
 /**
  * Tests for L3 AgentSpawnerPlugin.
  * Covers IAgentSpawner interface compliance, spawn/result/cancel/status lifecycle.
+ *
+ * Two modes tested:
+ *   - Stub mode: no registry provided → timer-based simulation
+ *   - AgentLoop mode: registry with MockProvider → real LLM-driven execution
  */
 import { describe, it, expect, beforeEach } from 'bun:test';
 import { AgentSpawnerPlugin } from '../../src/plugins/agents/spawner.ts';
+import { MockProvider } from '../../src/plugins/agents/providers/mock.ts';
+import { Registry } from '../../src/core/registry.ts';
 import type { AgentConfig } from '../../src/types/agent.ts';
 
 // ---------------------------------------------------------------------------
@@ -18,6 +24,20 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     ...overrides,
   };
 }
+
+/** Build a registry pre-loaded with a MockProvider and a canned end_turn response */
+function makeRegistryWithMock(mock: MockProvider): Registry {
+  const registry = new Registry();
+  registry.register('llm-provider', mock);
+  return registry;
+}
+
+/** Standard end_turn response for MockProvider */
+const END_TURN_RESPONSE = {
+  content: [{ type: 'text' as const, text: 'Task complete.' }],
+  stopReason: 'end_turn' as const,
+  usage: { inputTokens: 10, outputTokens: 5 },
+};
 
 // ---------------------------------------------------------------------------
 // Interface compliance
@@ -46,10 +66,10 @@ describe('AgentSpawnerPlugin — interface compliance', () => {
 });
 
 // ---------------------------------------------------------------------------
-// spawn()
+// spawn() — stub mode (no registry)
 // ---------------------------------------------------------------------------
 
-describe('AgentSpawnerPlugin — spawn()', () => {
+describe('AgentSpawnerPlugin — spawn() [stub mode]', () => {
   let spawner: AgentSpawnerPlugin;
 
   beforeEach(() => {
@@ -69,7 +89,6 @@ describe('AgentSpawnerPlugin — spawn()', () => {
     expect(handle.type).toBe('engineer');
     expect(typeof handle.spawnedAt).toBe('number');
     expect(handle.spawnedAt).toBeGreaterThan(0);
-    // await result so the timer doesn't leak
     await spawner.result(handle);
   });
 
@@ -89,17 +108,16 @@ describe('AgentSpawnerPlugin — spawn()', () => {
   it('status is "running" immediately after spawn', async () => {
     const handle = await spawner.spawn(makeConfig());
     const s = spawner.status(handle);
-    // status is 'running' synchronously after spawn
     expect(s).toBe('running');
     await spawner.result(handle);
   });
 });
 
 // ---------------------------------------------------------------------------
-// result()
+// result() — stub mode
 // ---------------------------------------------------------------------------
 
-describe('AgentSpawnerPlugin — result()', () => {
+describe('AgentSpawnerPlugin — result() [stub mode]', () => {
   let spawner: AgentSpawnerPlugin;
 
   beforeEach(() => {
@@ -151,10 +169,10 @@ describe('AgentSpawnerPlugin — result()', () => {
 });
 
 // ---------------------------------------------------------------------------
-// cancel()
+// cancel() — stub mode
 // ---------------------------------------------------------------------------
 
-describe('AgentSpawnerPlugin — cancel()', () => {
+describe('AgentSpawnerPlugin — cancel() [stub mode]', () => {
   let spawner: AgentSpawnerPlugin;
 
   beforeEach(() => {
@@ -190,13 +208,12 @@ describe('AgentSpawnerPlugin — cancel()', () => {
 
   it('cancel() on completed agent is a no-op', async () => {
     const handle = await spawner.spawn(makeConfig());
-    await spawner.result(handle); // wait for completion
+    await spawner.result(handle);
     await expect(spawner.cancel(handle)).resolves.toBeUndefined();
     expect(spawner.status(handle)).toBe('completed');
   });
 
   it('result() parked before cancel() resolves with cancelled status', async () => {
-    // Use a long timeout so stub won't complete before cancel
     const handle = await spawner.spawn(makeConfig({ timeoutMs: 60_000 }));
     const resultPromise = spawner.result(handle);
     await spawner.cancel(handle);
@@ -206,10 +223,10 @@ describe('AgentSpawnerPlugin — cancel()', () => {
 });
 
 // ---------------------------------------------------------------------------
-// status()
+// status() — stub mode
 // ---------------------------------------------------------------------------
 
-describe('AgentSpawnerPlugin — status()', () => {
+describe('AgentSpawnerPlugin — status() [stub mode]', () => {
   it('returns "running" immediately after spawn', async () => {
     const spawner = new AgentSpawnerPlugin();
     const handle = await spawner.spawn(makeConfig());
@@ -239,27 +256,21 @@ describe('AgentSpawnerPlugin — status()', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Timeout handling
+// Timeout handling — stub mode
 // ---------------------------------------------------------------------------
 
-describe('AgentSpawnerPlugin — timeout handling', () => {
+describe('AgentSpawnerPlugin — timeout handling [stub mode]', () => {
   it('stub completes within timeoutMs when timeoutMs is large', async () => {
     const spawner = new AgentSpawnerPlugin();
-    // stub completes at min(timeoutMs, 100)ms — with large timeout, it completes at 100ms
     const handle = await spawner.spawn(makeConfig({ timeoutMs: 5000 }));
     const result = await spawner.result(handle);
     expect(result.status).toBe('completed');
   });
 
   it('agent fails with TIMEOUT when timeoutMs is very small and completion is fast', async () => {
-    // The stub completion delay is min(timeoutMs, 100). With timeoutMs=1,
-    // stub delay=1ms but timeout also fires at 1ms — race condition.
-    // We test that a reasonable short timeout eventually resolves (not hangs).
     const spawner = new AgentSpawnerPlugin();
-    // Use timeoutMs=100 (equal to stub delay) - stub will complete at or before timeout
     const handle = await spawner.spawn(makeConfig({ timeoutMs: 100 }));
     const result = await spawner.result(handle);
-    // Either completed or failed (timeout) — both are valid terminal states
     expect(['completed', 'failed']).toContain(result.status);
   });
 
@@ -272,5 +283,150 @@ describe('AgentSpawnerPlugin — timeout handling', () => {
       expect(handles[i].type).toBe(types[i]);
     }
     await Promise.all(handles.map(h => spawner.result(h)));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AgentLoop mode — real LLM-driven execution via MockProvider
+// ---------------------------------------------------------------------------
+
+describe('AgentSpawnerPlugin — AgentLoop mode (MockProvider)', () => {
+  it('spawn with MockProvider creates a real AgentLoop and completes', async () => {
+    const mock = new MockProvider();
+    mock.enqueue(END_TURN_RESPONSE);
+    const registry = makeRegistryWithMock(mock);
+    const spawner = new AgentSpawnerPlugin(registry);
+
+    const handle = await spawner.spawn(makeConfig());
+    expect(handle.type).toBe('engineer');
+    expect(spawner.status(handle)).toBe('running');
+
+    const result = await spawner.result(handle);
+    expect(result.status).toBe('completed');
+    expect(result.output).toBe('Task complete.');
+    expect(result.handle).toBe(handle);
+    expect(typeof result.durationMs).toBe('number');
+    expect(result.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('result returns AgentLoopResult mapped to AgentResult', async () => {
+    const mock = new MockProvider();
+    mock.enqueue({
+      content: [{ type: 'text', text: 'Implementation done.' }],
+      stopReason: 'end_turn',
+      usage: { inputTokens: 20, outputTokens: 10 },
+    });
+    const registry = makeRegistryWithMock(mock);
+    const spawner = new AgentSpawnerPlugin(registry);
+
+    const handle = await spawner.spawn(makeConfig({ type: 'reviewer' }));
+    const result = await spawner.result(handle);
+
+    expect(result.status).toBe('completed');
+    expect(result.output).toBe('Implementation done.');
+    expect(Array.isArray(result.filesModified)).toBe(true);
+    expect(Array.isArray(result.errors)).toBe(result.errors !== undefined);
+  });
+
+  it('cancel() aborts a running AgentLoop', async () => {
+    const mock = new MockProvider();
+    // Do not enqueue a response — loop will block waiting for LLM
+    // We cancel before it resolves
+    const registry = makeRegistryWithMock(mock);
+    const spawner = new AgentSpawnerPlugin(registry);
+
+    // Use a large timeout so timeout doesn't fire
+    const handle = await spawner.spawn(makeConfig({ timeoutMs: 60_000 }));
+    expect(spawner.status(handle)).toBe('running');
+
+    // Park a result promise, then cancel
+    const resultPromise = spawner.result(handle);
+    await spawner.cancel(handle);
+
+    // Status should be cancelled
+    expect(spawner.status(handle)).toBe('cancelled');
+
+    // Result resolves with cancelled status
+    const result = await resultPromise;
+    expect(result.status).toBe('cancelled');
+  });
+
+  it('status tracks through running → completed', async () => {
+    const mock = new MockProvider();
+    mock.enqueue(END_TURN_RESPONSE);
+    const registry = makeRegistryWithMock(mock);
+    const spawner = new AgentSpawnerPlugin(registry);
+
+    const handle = await spawner.spawn(makeConfig());
+    expect(spawner.status(handle)).toBe('running');
+
+    await spawner.result(handle);
+    expect(spawner.status(handle)).toBe('completed');
+  });
+
+  it('fallback to stub when no llm-provider in registry', async () => {
+    // Registry without llm-provider registered
+    const registry = new Registry();
+    const spawner = new AgentSpawnerPlugin(registry);
+
+    const handle = await spawner.spawn(makeConfig());
+    const result = await spawner.result(handle);
+    // Stub completes with 'completed'
+    expect(result.status).toBe('completed');
+    expect(result.output).toContain('[stub]');
+  });
+
+  it('MockProvider chat() is called with the task as user message', async () => {
+    const mock = new MockProvider();
+    mock.enqueue(END_TURN_RESPONSE);
+    const registry = makeRegistryWithMock(mock);
+    const spawner = new AgentSpawnerPlugin(registry);
+
+    const task = 'build the authentication module';
+    const handle = await spawner.spawn(makeConfig({ task }));
+    await spawner.result(handle);
+
+    expect(mock.calls.length).toBe(1);
+    const params = mock.calls[0];
+    expect(params.messages[0].role).toBe('user');
+    expect(params.messages[0].content).toBe(task);
+  });
+
+  it('uses the agent type systemPromptPrefix from AGENT_TYPE_CONFIGS', async () => {
+    const mock = new MockProvider();
+    mock.enqueue(END_TURN_RESPONSE);
+    const registry = makeRegistryWithMock(mock);
+    const spawner = new AgentSpawnerPlugin(registry);
+
+    const handle = await spawner.spawn(makeConfig({ type: 'tester' }));
+    await spawner.result(handle);
+
+    const params = mock.calls[0];
+    expect(typeof params.systemPrompt).toBe('string');
+    expect(params.systemPrompt).toContain('testing specialist');
+  });
+
+  it('tool providers from registry are passed to AgentLoop', async () => {
+    const mock = new MockProvider();
+    mock.enqueue(END_TURN_RESPONSE);
+    const registry = makeRegistryWithMock(mock);
+
+    // Register a mock tool provider
+    const toolProvider = {
+      name: 'my-tools',
+      tools: [{ name: 'do_thing', description: 'Does a thing', inputSchema: {} }],
+      execute: async (_name: string, _params: unknown) => ({ success: true, data: 'done' }),
+    };
+    registry.registerMany('tool-provider', 'my-tools', toolProvider);
+
+    const spawner = new AgentSpawnerPlugin(registry);
+    const handle = await spawner.spawn(makeConfig());
+    await spawner.result(handle);
+
+    // MockProvider received tool definitions
+    const params = mock.calls[0];
+    expect(params.tools).toBeDefined();
+    expect(params.tools!.length).toBeGreaterThan(0);
+    expect(params.tools![0].name).toBe('my-tools__do_thing');
   });
 });

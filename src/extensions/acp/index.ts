@@ -25,3 +25,4 @@ export { PermissionGate, MODE_POLICIES } from './permission-gate.js';
 export type { PermissionRequest, PermissionResult, PermissionPolicy, PermissionType } from './permission-gate.js';
 export { PlanEmitter } from './plan-emitter.js';
 export { CommandsEmitter } from './commands-emitter.js';
+export { AgentEventBridge } from './agent-event-bridge.js';

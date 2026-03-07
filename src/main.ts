@@ -49,6 +49,7 @@ import { FrontendPlugin } from './plugins/frontend/index.js';
 import { EventRecorder } from './extensions/acp/event-recorder.js';
 import { GoodVibesExtensions } from './extensions/acp/extensions.js';
 import { ToolCallEmitter } from './extensions/acp/tool-call-emitter.js';
+import { AgentEventBridge } from './extensions/acp/agent-event-bridge.js';
 
 // ---------------------------------------------------------------------------
 // Startup banner
@@ -308,6 +309,10 @@ toolCallEmitter = new ToolCallEmitter(conn);
 const sessionAdapter = new SessionAdapter(conn, sessionManager, eventBus);
 sessionAdapter.register();
 
+// Bridge agent lifecycle events to ACP session updates
+const agentEventBridge = new AgentEventBridge(conn, eventBus, agentTracker);
+agentEventBridge.register();
+
 // L2 ACP extension methods (_goodvibes/*)
 const eventRecorder = new EventRecorder(eventBus);
 eventRecorder.register();
@@ -361,3 +366,4 @@ void serviceRegistry;
 void mcpBridge;
 void daemonManager;
 void goodvibesExtensions;
+void agentEventBridge;

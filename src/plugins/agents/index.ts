@@ -5,6 +5,9 @@
  * Plugin registration entry point for the agents plugin.
  * Registers AgentSpawnerPlugin into the L1 Registry under the
  * 'agent-spawner' capability key.
+ *
+ * Passes the registry to AgentSpawnerPlugin so it can resolve ILLMProvider
+ * and IToolProvider instances at spawn time.
  */
 
 import type { PluginRegistration } from '../../types/plugin.js';
@@ -25,7 +28,8 @@ export const AgentsPlugin: PluginRegistration = {
     capabilities: ['agent-spawning'],
   },
   register: (registry: unknown) => {
-    (registry as Registry).register('agent-spawner', new AgentSpawnerPlugin());
+    const reg = registry as Registry;
+    reg.register('agent-spawner', new AgentSpawnerPlugin(reg));
   },
   shutdown: async () => {},
 };
