@@ -1,11 +1,31 @@
 node_modules/
 dist/
 *.tsbuildinfo
-.goodvibes/.exec-output/
-.goodvibes/.overflow/
-.goodvibes/analytics/
-.goodvibes/.backups/
-.goodvibes/.exec-output/
-.goodvibes/runtime-state.json
-.goodvibes/state/
 *.log
+
+# GoodVibes plugin state
+.goodvibes/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+*.env
+
+# Secret files
+*.pem
+*.key
+credentials.json
+secrets.json
+service-account*.json
+
+# Cloud credentials
+.aws/
+.gcp/
+kubeconfig
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+prisma/*.db
