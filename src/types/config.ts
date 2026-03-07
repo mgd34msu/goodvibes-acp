@@ -21,28 +21,51 @@ export type PluginConfig = Record<string, unknown>;
 
 /** Top-level runtime configuration */
 export type RuntimeConfig = {
-  /** Process mode: run as a subprocess per-connection or as a long-running daemon */
-  mode: 'subprocess' | 'daemon';
-  /** TCP port for daemon mode (default: 3000) */
-  port?: number;
-  /** Unix socket path for MCP bridge (daemon mode) */
-  socketPath?: string;
-  /** Log verbosity */
-  logLevel: LogLevel;
-  /** Plugin-specific configuration blocks keyed by plugin name */
-  plugins?: Record<string, PluginConfig>;
+  /** Runtime process configuration */
+  runtime?: {
+    /** Process mode: run as a subprocess per-connection or as a long-running daemon */
+    mode?: 'subprocess' | 'daemon';
+    /** TCP port for daemon/HTTP mode */
+    port?: number;
+    /** Bind address for daemon mode */
+    host?: string;
+    /** Grace period in ms for agent shutdown (default: 10000) */
+    agentGracePeriodMs?: number;
+  };
+  /** Logging configuration */
+  logging?: {
+    /** Log verbosity */
+    level?: LogLevel;
+    /** Directory for log files */
+    dir?: string;
+  };
+  /** Memory/state persistence configuration */
+  memory?: {
+    /** Directory for memory files */
+    dir?: string;
+    /** Maximum number of memory entries to retain */
+    maxEntries?: number;
+  };
   /** WRFC quality gate configuration */
   wrfc?: {
-    minReviewScore: number;
-    maxAttempts: number;
-    enableQualityGates: boolean;
+    minReviewScore?: number;
+    maxFixAttempts?: number;
+    enableQualityGates?: boolean;
   };
-  /** Agent concurrency limits */
+  /** Agent concurrency configuration */
   agents?: {
-    maxParallel: number;
-    defaultTimeoutMs: number;
-    gracePeriodMs: number;
+    maxParallel?: number;
+    defaultTimeout?: number;
   };
+  /** Health check endpoint configuration */
+  health?: {
+    port?: number;
+    path?: string;
+  };
+  /** Plugin-specific configuration blocks keyed by plugin name */
+  plugins?: Record<string, PluginConfig>;
+  /** Allow arbitrary extension keys */
+  [key: string]: unknown;
 };
 
 // ---------------------------------------------------------------------------

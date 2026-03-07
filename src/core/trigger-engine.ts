@@ -7,67 +7,24 @@
 
 import type { EventBus, EventRecord, Disposable } from './event-bus.js';
 import type { Registry } from './registry.js';
+import type { TriggerDefinition, TriggerContext } from '../types/trigger.js';
+import type { ITriggerHandler } from '../types/registry.js';
+
+export type { TriggerDefinition, TriggerContext, ITriggerHandler };
 
 /**
- * A trigger definition that maps event conditions to handler actions.
- * TODO: L0 src/types/trigger.ts defines TriggerDefinition with a different shape
- * (condition/action objects) vs this flat shape (eventPattern, handlerKey, etc.).
- * Keeping local definition until shapes are aligned.
+ * L1 extension of TriggerDefinition: adds a runtime condition function that
+ * receives the full typed EventRecord (L0's TriggerDefinition uses
+ * Record<string, unknown> since L0 cannot import L1 types).
  */
-export interface TriggerDefinition {
-  /** Unique trigger identifier */
-  id: string;
-  /** Human-readable name */
-  name: string;
-  /** Event type pattern to match:
-   * - Exact: 'session:started'
-   * - Wildcard: 'session:*' matches any event starting with 'session:'
-   * - All: '*' matches every event
-   * - Regex: '/pattern/' (string starting and ending with '/')
-   */
-  eventPattern: string;
-  /** Optional additional condition on the event payload */
+export type TriggerDefinitionWithCondition = TriggerDefinition & {
+  /** Optional additional runtime condition evaluated against the EventRecord */
   condition?: (event: EventRecord) => boolean;
-  /** Registry key for the ITriggerHandler implementation */
-  handlerKey: string;
-  /** Whether the trigger is currently enabled (default: true) */
-  enabled?: boolean;
-  /** Maximum number of times to fire (undefined = unlimited) */
-  maxFires?: number;
-  /** Session ID to scope to (undefined = all sessions) */
-  sessionId?: string;
-  /** Additional metadata passed to the handler */
-  metadata?: Record<string, unknown>;
-}
-
-/**
- * Context passed to trigger handlers when a trigger fires.
- */
-export interface TriggerContext {
-  /** The trigger that fired */
-  trigger: TriggerDefinition;
-  /** The event that caused the trigger to fire */
-  event: EventRecord;
-  /** Number of times this trigger has fired (including this one) */
-  fireCount: number;
-}
-
-/**
- * Interface for trigger handler implementations (registered in L1 Registry).
- * Implemented by L3 plugins and registered at startup.
- * TODO: L0 src/types/registry.ts defines ITriggerHandler using L0's TriggerDefinition/TriggerContext
- * shapes which differ from L1's local shapes. Keeping local definition until shapes are aligned.
- */
-export interface ITriggerHandler {
-  /** Check if this handler can process the given trigger */
-  canHandle(trigger: TriggerDefinition): boolean;
-  /** Execute the trigger action */
-  execute(trigger: TriggerDefinition, context: TriggerContext): Promise<void>;
-}
+};
 
 /** Internal tracking state for a registered trigger */
 interface TriggerState {
-  definition: TriggerDefinition;
+  definition: TriggerDefinitionWithCondition;
   fireCount: number;
   enabled: boolean;
 }
@@ -151,7 +108,7 @@ export class TriggerEngine {
    * @param trigger - Trigger to register
    * @throws Error if a trigger with the same id is already registered
    */
-  register(trigger: TriggerDefinition): void {
+  register(trigger: TriggerDefinitionWithCondition): void {
     this._assertNotDestroyed();
     if (this._triggers.has(trigger.id)) {
       throw new Error(`TriggerEngine: trigger '${trigger.id}' is already registered`);
@@ -249,7 +206,7 @@ export class TriggerEngine {
       // Execute handler with error isolation
       const context: TriggerContext = {
         trigger: definition,
-        event,
+        event: event as unknown as Record<string, unknown>,
         fireCount: state.fireCount,
       };
 
@@ -270,7 +227,7 @@ export class TriggerEngine {
    *
    * @returns Array of trigger definitions
    */
-  list(): TriggerDefinition[] {
+  list(): TriggerDefinitionWithCondition[] {
     return Array.from(this._triggers.values()).map((s) => s.definition);
   }
 
@@ -280,7 +237,7 @@ export class TriggerEngine {
    * @param triggerId - Trigger ID
    * @returns Trigger definition, or undefined if not found
    */
-  get(triggerId: string): TriggerDefinition | undefined {
+  get(triggerId: string): TriggerDefinitionWithCondition | undefined {
     return this._triggers.get(triggerId)?.definition;
   }
 

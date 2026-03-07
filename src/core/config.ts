@@ -7,53 +7,10 @@
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import type { RuntimeConfig } from '../types/config.js';
 import type { Disposable } from './event-bus.js';
 
-/**
- * Runtime configuration shape.
- * TODO: L0 src/types/config.ts defines RuntimeConfig with a different flat shape
- * (mode, port, logLevel) vs this nested shape (runtime.mode, logging.level, etc.).
- * Keeping local definition until shapes are aligned.
- */
-export interface RuntimeConfig {
-  /** Runtime mode: 'subprocess' | 'daemon' */
-  runtime?: {
-    mode?: 'subprocess' | 'daemon';
-    port?: number;
-    host?: string;
-    /** Grace period in ms for agent shutdown (default: 10000) */
-    agentGracePeriodMs?: number;
-  };
-  /** Logging configuration */
-  logging?: {
-    level?: 'debug' | 'info' | 'warn' | 'error';
-    dir?: string;
-  };
-  /** Memory configuration */
-  memory?: {
-    dir?: string;
-    maxEntries?: number;
-  };
-  /** WRFC configuration */
-  wrfc?: {
-    minReviewScore?: number;
-    maxFixAttempts?: number;
-    enableQualityGates?: boolean;
-  };
-  /** Agent configuration */
-  agents?: {
-    maxParallel?: number;
-    defaultTimeout?: number;
-  };
-  /** Health check configuration */
-  health?: {
-    port?: number;
-    path?: string;
-  };
-  /** Plugin-specific configuration */
-  plugins?: Record<string, unknown>;
-  [key: string]: unknown;
-}
+export type { RuntimeConfig };
 
 /** Default configuration values */
 const DEFAULTS: RuntimeConfig = {

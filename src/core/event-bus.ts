@@ -5,10 +5,11 @@
  * Zero external npm dependencies.
  */
 
-// L0 types note: L0 exports Event<T> (src/types/events.ts) which has a different shape
-// from the L1 EventRecord<T> used internally here (L1 adds 'id' field and uses 'sessionId'
-// at the record level). Keeping local definitions below.
-// TODO: Align EventRecord shape with L0 Event<T> in a future refactor.
+// L0 types note: L0 exports Event<T> (src/types/events.ts) which defines the canonical
+// event envelope shape. L1's EventRecord<T> is a runtime extension of that shape, adding
+// an 'id' field (generated at emit time) and making 'sessionId' optional (not all events
+// are session-scoped). EventRecord<T> is intentionally kept local to L1 as it carries
+// runtime-generated state that L0 (pure types) cannot represent.
 
 /** Represents a single recorded event in history */
 export interface EventRecord<TPayload = unknown> {

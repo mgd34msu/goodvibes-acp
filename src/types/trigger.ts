@@ -7,32 +7,6 @@
  */
 
 // ---------------------------------------------------------------------------
-// Trigger condition
-// ---------------------------------------------------------------------------
-
-/** Defines when a trigger fires */
-export type TriggerCondition = {
-  /** Event type pattern to match (supports wildcard, e.g. "agent:*") */
-  eventType: string;
-  /** Human-readable description of the predicate logic */
-  predicateDescription?: string;
-  /** Optional JSON-serializable predicate for simple field matching */
-  match?: Record<string, unknown>;
-};
-
-// ---------------------------------------------------------------------------
-// Trigger action
-// ---------------------------------------------------------------------------
-
-/** Defines what happens when a trigger fires */
-export type TriggerAction = {
-  /** Key identifying the handler registered in the L1 registry */
-  handlerKey: string;
-  /** Parameters to pass to the handler */
-  params?: Record<string, unknown>;
-};
-
-// ---------------------------------------------------------------------------
 // Trigger definition
 // ---------------------------------------------------------------------------
 
@@ -42,16 +16,25 @@ export type TriggerDefinition = {
   id: string;
   /** Human-readable name */
   name: string;
-  /** Condition that causes this trigger to fire */
-  condition: TriggerCondition;
-  /** Action to take when the condition is met */
-  action: TriggerAction;
-  /** Whether this trigger is currently active */
-  enabled: boolean;
-  /** Maximum number of times this trigger may fire (undefined = unlimited) */
+  /** Event type pattern to match:
+   * - Exact: 'session:started'
+   * - Wildcard prefix: 'session:*' matches any event starting with 'session:'
+   * - Wildcard all: '*' matches every event
+   * - Regex: '/pattern/' (string starting and ending with '/')
+   */
+  eventPattern: string;
+  /** Optional payload predicate — JSON-serializable field matcher */
+  match?: Record<string, unknown>;
+  /** Registry key for the ITriggerHandler implementation */
+  handlerKey: string;
+  /** Whether the trigger is currently enabled (default: true) */
+  enabled?: boolean;
+  /** Maximum number of times to fire (undefined = unlimited) */
   maxFires?: number;
-  /** Number of times this trigger has fired so far */
-  fireCount: number;
+  /** Session ID to scope to (undefined = all sessions) */
+  sessionId?: string;
+  /** Additional metadata passed to the handler */
+  metadata?: Record<string, unknown>;
 };
 
 // ---------------------------------------------------------------------------
@@ -60,12 +43,10 @@ export type TriggerDefinition = {
 
 /** Context passed to a trigger handler when a trigger fires */
 export type TriggerContext = {
-  /** The event that caused the trigger to fire */
+  /** The trigger that fired */
+  trigger: TriggerDefinition;
+  /** The event that caused the trigger to fire (typed as generic record; L1 narrows to EventRecord) */
   event: Record<string, unknown>;
-  /** The session context at the time of firing */
-  sessionId: string;
-  /** Unix timestamp (ms) when the trigger fired */
-  timestamp: number;
   /** Number of times this trigger has fired (including this one) */
   fireCount: number;
 };

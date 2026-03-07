@@ -59,6 +59,7 @@ export type {
   TriggerDefinition,
   TriggerContext,
   ITriggerHandler,
+  TriggerDefinitionWithCondition,
 } from './trigger-engine.js';
 export { TriggerEngine } from './trigger-engine.js';
 

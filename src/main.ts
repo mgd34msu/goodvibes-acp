@@ -17,7 +17,7 @@ import { Registry } from './core/registry.js';
 import { Config } from './core/config.js';
 import { SessionManager } from './extensions/sessions/manager.js';
 import { WRFCOrchestrator } from './extensions/wrfc/orchestrator.js';
-import type { WRFCRunParams } from './extensions/wrfc/orchestrator.js';
+import type { WRFCRunParams, WRFCCallbacks } from './extensions/wrfc/orchestrator.js';
 import type { WRFCConfig } from './types/wrfc.js';
 import { GoodVibesAgent } from './extensions/acp/agent.js';
 import { WRFCHandlers } from './extensions/wrfc/handlers.js';
@@ -48,6 +48,7 @@ import { ProjectPlugin } from './plugins/project/index.js';
 import { FrontendPlugin } from './plugins/frontend/index.js';
 import { EventRecorder } from './extensions/acp/event-recorder.js';
 import { GoodVibesExtensions } from './extensions/acp/extensions.js';
+import { ToolCallEmitter } from './extensions/acp/tool-call-emitter.js';
 
 // ---------------------------------------------------------------------------
 // Startup banner
@@ -140,6 +141,12 @@ const mcpBridge = new McpBridge(eventBus);
 const daemonManager = new DaemonManager(eventBus);
 
 // ---------------------------------------------------------------------------
+// ToolCallEmitter — lazily assigned after conn is created
+// ---------------------------------------------------------------------------
+
+let toolCallEmitter: InstanceType<typeof ToolCallEmitter> | null = null;
+
+// ---------------------------------------------------------------------------
 // WRFC adapter — bridges IWRFCRunner (agent.ts) to WRFCOrchestrator.run()
 //
 // WRFCOrchestrator.run() requires spawner/reviewer/fixer/callbacks that will
@@ -196,14 +203,53 @@ const wrfcAdapter = {
         },
       },
 
-      // No-op lifecycle callbacks.
-      // Consumers may observe the event bus instead.
-      callbacks: {
-        onStateChange: () => {},
-        onWorkComplete: () => {},
-        onReviewComplete: () => {},
-        onFixComplete: () => {},
-      },
+      // WRFC lifecycle callbacks — emit tool_call updates so ACP clients
+      // can observe phase progress in real time.
+      // toolCallEmitter is lazily resolved — it is assigned after conn is created below.
+      callbacks: (() => {
+        const ids: Record<string, string> = {};
+        const cb: WRFCCallbacks = {
+          onStateChange: (_from, to) => {
+            const phase =
+              to === 'working' ? 'goodvibes_work'
+              : to === 'reviewing' ? 'goodvibes_review'
+              : to === 'fixing' ? 'goodvibes_fix'
+              : null;
+            if (!phase || !toolCallEmitter) return;
+            ids[phase] = crypto.randomUUID();
+            toolCallEmitter.emitToolCall(
+              params.sessionId,
+              ids[phase],
+              phase,
+              phase === 'goodvibes_work' ? 'Running task'
+                : phase === 'goodvibes_review' ? 'Reviewing output'
+                : 'Applying fixes',
+              'in_progress',
+            ).catch(() => {});
+          },
+          onWorkComplete: () => {
+            const id = ids['goodvibes_work'];
+            if (!id || !toolCallEmitter) return;
+            toolCallEmitter.emitToolCallUpdate(params.sessionId, id, 'completed').catch(() => {});
+          },
+          onReviewComplete: (result) => {
+            const id = ids['goodvibes_review'];
+            if (!id || !toolCallEmitter) return;
+            toolCallEmitter.emitToolCallUpdate(
+              params.sessionId,
+              id,
+              'completed',
+              { score: result.score },
+            ).catch(() => {});
+          },
+          onFixComplete: () => {
+            const id = ids['goodvibes_fix'];
+            if (!id || !toolCallEmitter) return;
+            toolCallEmitter.emitToolCallUpdate(params.sessionId, id, 'completed').catch(() => {});
+          },
+        };
+        return cb;
+      })(),
     };
 
     const result = await wrfcOrchestrator.run(runParams);
@@ -252,9 +298,12 @@ const stream = acp.ndJsonStream(
 // ---------------------------------------------------------------------------
 
 const conn = new acp.AgentSideConnection(
-  (c) => new GoodVibesAgent(c, registry, eventBus, sessionManager, wrfcAdapter),
+  (c) => new GoodVibesAgent(c, registry, eventBus, sessionManager, wrfcAdapter, mcpBridge),
   stream,
 );
+
+// Assign emitter now that conn is available
+toolCallEmitter = new ToolCallEmitter(conn);
 
 const sessionAdapter = new SessionAdapter(conn, sessionManager, eventBus);
 sessionAdapter.register();

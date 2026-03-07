@@ -15,6 +15,7 @@ import { Registry } from '../../core/registry.js';
 import { EventBus } from '../../core/event-bus.js';
 import { buildConfigOptions, modeFromConfigValue, CONFIG_ID_MODE, CONFIG_ID_MODEL } from './config-adapter.js';
 import { toAcpError, ACP_ERROR_CODES } from './errors.js';
+import type { McpBridge } from '../mcp/bridge.js';
 
 // ---------------------------------------------------------------------------
 // Adapter interface
@@ -54,6 +55,8 @@ function messageChunkUpdate(
 
 /**
  * Build a typed session_info_update SessionUpdate.
+ * NOTE: The literal used here is 'session_info_update'. ACP doc-04 references 'session_info'
+ * — if the SDK is updated to use that name, this cast will need updating.
  */
 function sessionInfoUpdate(title: string, updatedAt: string): schema.SessionUpdate {
   return { sessionUpdate: 'session_info_update' as const, title, updatedAt };
@@ -82,6 +85,7 @@ export class GoodVibesAgent implements Agent {
     private readonly eventBus: EventBus,
     private readonly sessions: SessionManager,
     private readonly wrfc: WRFCRunner,
+    private readonly mcpBridge?: McpBridge,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -103,12 +107,12 @@ export class GoodVibesAgent implements Agent {
       },
       agentCapabilities: {
         loadSession: true,
+        mcpCapabilities: { http: false, sse: false },
         promptCapabilities: {
           embeddedContext: true,
           image: false,
           audio: false,
         },
-        mcpCapabilities: {},
       },
     };
   }
@@ -127,6 +131,15 @@ export class GoodVibesAgent implements Agent {
       sessionId,
       cwd: params.cwd,
     });
+
+    // Connect MCP servers if provided and bridge is available
+    if (this.mcpBridge && params.mcpServers && params.mcpServers.length > 0) {
+      const connections = await this.mcpBridge.connectServers(params.mcpServers);
+      const connectedIds = connections.map((c) => c.serverId);
+      if (connectedIds.length > 0) {
+        console.error(`[GoodVibesAgent] MCP servers connected for session ${sessionId}: ${connectedIds.join(', ')}`);
+      }
+    }
 
     return {
       sessionId,
@@ -236,6 +249,10 @@ export class GoodVibesAgent implements Agent {
       });
 
       if (controller.signal.aborted) {
+        await this.conn.sessionUpdate({
+          sessionId,
+          update: { sessionUpdate: 'finish', stopReason: 'cancelled' } as any,
+        }).catch(() => {});
         return { stopReason: 'cancelled' };
       }
 
@@ -259,9 +276,19 @@ export class GoodVibesAgent implements Agent {
         timestamp: Date.now(),
       });
 
+      // Emit finish session update before returning
+      await this.conn.sessionUpdate({
+        sessionId,
+        update: { sessionUpdate: 'finish', stopReason: 'end_turn' } as any,
+      });
+
       return { stopReason: 'end_turn' };
     } catch (err) {
       if (controller.signal.aborted) {
+        await this.conn.sessionUpdate({
+          sessionId,
+          update: { sessionUpdate: 'finish', stopReason: 'cancelled' } as any,
+        }).catch(() => {});
         return { stopReason: 'cancelled' };
       }
 
@@ -270,6 +297,11 @@ export class GoodVibesAgent implements Agent {
       await this.conn.sessionUpdate({
         sessionId,
         update: messageChunkUpdate('agent_message_chunk', { type: 'text', text: `Error: ${acpErr.message}` }),
+      }).catch(() => {});
+
+      await this.conn.sessionUpdate({
+        sessionId,
+        update: { sessionUpdate: 'finish', stopReason: 'end_turn' } as any,
       }).catch(() => {});
 
       return { stopReason: 'end_turn' };
