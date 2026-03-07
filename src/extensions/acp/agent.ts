@@ -16,6 +16,8 @@ import { EventBus } from '../../core/event-bus.js';
 import { buildConfigOptions, modeFromConfigValue, CONFIG_ID_MODE, CONFIG_ID_MODEL } from './config-adapter.js';
 import { toAcpError, ACP_ERROR_CODES } from './errors.js';
 import type { McpBridge } from '../mcp/bridge.js';
+import { PlanEmitter } from './plan-emitter.js';
+import { CommandsEmitter } from './commands-emitter.js';
 
 // ---------------------------------------------------------------------------
 // Adapter interface
@@ -79,6 +81,11 @@ export class GoodVibesAgent implements Agent {
   /** Per-session AbortControllers for cancellation */
   private readonly _abortControllers = new Map<string, AbortController>();
 
+  /** Plan emitter for WRFC phase visibility */
+  private readonly planEmitter: PlanEmitter;
+  /** Commands emitter for slash command advertisement */
+  private readonly commandsEmitter: CommandsEmitter;
+
   constructor(
     private readonly conn: AgentSideConnection,
     private readonly registry: Registry,
@@ -86,7 +93,10 @@ export class GoodVibesAgent implements Agent {
     private readonly sessions: SessionManager,
     private readonly wrfc: WRFCRunner,
     private readonly mcpBridge?: McpBridge,
-  ) {}
+  ) {
+    this.planEmitter = new PlanEmitter(conn);
+    this.commandsEmitter = new CommandsEmitter(conn);
+  }
 
   // -------------------------------------------------------------------------
   // initialize
@@ -140,6 +150,9 @@ export class GoodVibesAgent implements Agent {
         console.error(`[GoodVibesAgent] MCP servers connected for session ${sessionId}: ${connectedIds.join(', ')}`);
       }
     }
+
+    // Advertise available commands to the client at session start
+    await this.commandsEmitter.emitCommands(sessionId);
 
     return {
       sessionId,
@@ -240,6 +253,9 @@ export class GoodVibesAgent implements Agent {
       });
 
       const workId = crypto.randomUUID();
+
+      // Emit initial WRFC plan so the client can see phases
+      this.planEmitter.initWrfcPlan(sessionId, workId);
 
       const result = await this.wrfc.run({
         workId,
