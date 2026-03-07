@@ -3,7 +3,7 @@
  * main.ts — GoodVibes ACP runtime composition root
  *
  * Wires all layers together:
- *   L0 types → L1 core → L2 extensions → L3 plugins (future)
+ *   L0 types → L1 core → L2 extensions → L3 plugins
  *
  * Transport: ACP ndjson over stdin/stdout.
  * All diagnostic output goes to stderr so stdout remains clean for ACP.
@@ -213,10 +213,28 @@ const wrfcAdapter = {
 // Startup: load memory and ensure log files exist
 // ---------------------------------------------------------------------------
 
+// Process mode detection
+const mode = process.argv.includes('--daemon') || process.env.GOODVIBES_MODE === 'daemon'
+  ? 'daemon' as const
+  : 'subprocess' as const;
+
+console.error(`[goodvibes-acp] Mode: ${mode}`);
+
+if (mode === 'daemon') {
+  // TODO: wire full daemon mode (IPC socket server, persistent process lifecycle)
+  console.error('[goodvibes-acp] Daemon mode detected — falling through to subprocess transport for now.');
+}
+
 await memoryManager.load();
 await logsManager.ensureFiles();
 healthCheck.markReady();
 console.error('[goodvibes-acp] Health check: ready');
+
+eventBus.emit('runtime:started', {
+  mode,
+  plugins: ['review', 'agents', 'skills', 'precision', 'analytics', 'project', 'frontend'],
+  timestamp: Date.now(),
+});
 
 // ---------------------------------------------------------------------------
 // ACP transport (ndjson over stdin/stdout)

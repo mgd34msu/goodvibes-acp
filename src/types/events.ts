@@ -73,9 +73,14 @@ export type ToolEventType =
   | 'tool:executed'
   | 'tool:failed';
 
+/** Plugin lifecycle event types */
+export type PluginEventType =
+  | 'plugin:registered';
+
 /** Runtime lifecycle event types */
 export type RuntimeEventType =
   | 'runtime:started'
+  | 'runtime:shutdown'
   | 'runtime:stopping'
   | 'runtime:stopped'
   | 'runtime:error';
@@ -87,6 +92,7 @@ export type AnyEventType =
   | WRFCEventType
   | TriggerEventType
   | ToolEventType
+  | PluginEventType
   | RuntimeEventType;
 
 // ---------------------------------------------------------------------------

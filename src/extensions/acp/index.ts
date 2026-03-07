@@ -18,3 +18,6 @@ export type { AcpErrorCode, AcpErrorShape } from './errors.js';
 export { createTransport, createStdioTransport } from './transport.js';
 export type { StdioTransportOptions, TcpTransportOptions, WebSocketTransportOptions, TransportOptions, AcpStream } from './transport.js';
 export { SessionAdapter } from './session-adapter.js';
+export { GoodVibesExtensions } from './extensions.js';
+export { EventRecorder } from './event-recorder.js';
+export type { RecordedEvent } from './event-recorder.js';

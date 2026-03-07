@@ -82,3 +82,7 @@ export type {
   HookRegistration,
 } from './hook-engine.js';
 export { HookEngine } from './hook-engine.js';
+
+// Versioned store
+export type { VersionedData } from './versioned-store.js';
+export { wrapVersioned, unwrapVersioned, isVersioned } from './versioned-store.js';
