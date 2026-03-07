@@ -13,6 +13,7 @@
  */
 
 export * from './agent';
+export * from './llm';
 export * from './config';
 export * from './constants';
 export * from './directive';

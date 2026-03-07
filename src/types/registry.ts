@@ -9,6 +9,7 @@
 
 import type { TriggerDefinition, TriggerContext } from './trigger.js';
 import type { AgentConfig, AgentHandle, AgentResult, AgentStatus } from './agent.js';
+import type { ChatParams, ChatResponse, ChatChunk } from './llm.js';
 
 // ---------------------------------------------------------------------------
 // Supporting value types
@@ -240,6 +241,24 @@ export interface ITerminal {
   kill(handle: TerminalHandle): Promise<void>;
   /** Release terminal resources and clean up (kills process if running) */
   release(handle: TerminalHandle): Promise<void>;
+}
+
+/**
+ * LLM inference provider.
+ * Implementations live in L3 (e.g., AnthropicProvider, MockProvider).
+ * The agent loop calls through this interface without knowing the backend.
+ *
+ * Registry key: 'llm-provider'
+ */
+export interface ILLMProvider {
+  /** Provider name (e.g., 'anthropic', 'openai', 'mock') */
+  readonly name: string;
+
+  /** Send a chat completion request and await the full response */
+  chat(params: ChatParams): Promise<ChatResponse>;
+
+  /** Stream a chat completion response as discrete chunks */
+  stream(params: ChatParams): AsyncIterable<ChatChunk>;
 }
 
 /**
