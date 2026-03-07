@@ -46,6 +46,8 @@ import { PrecisionPlugin } from './plugins/precision/index.js';
 import { AnalyticsPlugin } from './plugins/analytics/index.js';
 import { ProjectPlugin } from './plugins/project/index.js';
 import { FrontendPlugin } from './plugins/frontend/index.js';
+import { EventRecorder } from './extensions/acp/event-recorder.js';
+import { GoodVibesExtensions } from './extensions/acp/extensions.js';
 
 // ---------------------------------------------------------------------------
 // Startup banner
@@ -257,6 +259,13 @@ const conn = new acp.AgentSideConnection(
 const sessionAdapter = new SessionAdapter(conn, sessionManager, eventBus);
 sessionAdapter.register();
 
+// L2 ACP extension methods (_goodvibes/*)
+const eventRecorder = new EventRecorder(eventBus);
+eventRecorder.register();
+const goodvibesExtensions = new GoodVibesExtensions(
+  eventBus, stateStore, registry, healthCheck, agentTracker, eventRecorder,
+);
+
 console.error('[goodvibes-acp] Ready — listening for ACP messages on stdin.');
 
 // ---------------------------------------------------------------------------
@@ -302,3 +311,4 @@ void ipcRouter;
 void serviceRegistry;
 void mcpBridge;
 void daemonManager;
+void goodvibesExtensions;

@@ -64,7 +64,7 @@ describe('DependencyAnalyzer', () => {
     expect(result.dependencies).toHaveLength(0);
   });
 
-  it('result includes circular and unused arrays', async () => {
+  it('result includes circular, unused, and outdated arrays', async () => {
     await writeFile(join(tmpDir, 'package.json'), JSON.stringify({ dependencies: {} }), 'utf-8');
     const analyzer = new DependencyAnalyzer();
     const result = await analyzer.analyze(tmpDir);
@@ -84,7 +84,7 @@ describe('DependencyAnalyzer', () => {
     for (const dep of [...result.dependencies, ...result.devDependencies]) {
       expect(typeof dep.name).toBe('string');
       expect(dep.name.length).toBeGreaterThan(0);
-      expect(['dependency', 'devDependency']).toContain(dep.type);
+      expect(['prod', 'dev', 'peer']).toContain(dep.type);
     }
   });
 });
@@ -94,45 +94,46 @@ describe('DependencyAnalyzer', () => {
 // ---------------------------------------------------------------------------
 
 describe('SecurityScanner', () => {
-  it('detects AWS access key pattern in source file', async () => {
+  it('detects AWS access key pattern via checkSecrets', async () => {
     const src = join(tmpDir, 'config.ts');
     await writeFile(src, 'const key = "AKIAIOSFODNN7EXAMPLE";', 'utf-8');
 
     const scanner = new SecurityScanner();
-    const report = await scanner.scanSecrets(tmpDir);
+    const issues = await scanner.checkSecrets([src]);
 
-    const awsIssues = report.issues.filter((i) => i.description.toLowerCase().includes('aws'));
+    const awsIssues = issues.filter((i) => i.description.toLowerCase().includes('aws'));
     expect(awsIssues.length).toBeGreaterThan(0);
   });
 
-  it('detects Stripe secret key pattern', async () => {
+  it('detects Stripe secret key pattern via checkSecrets', async () => {
     const src = join(tmpDir, 'stripe.ts');
     await writeFile(src, 'const sk = "sk_live_FAKE_TEST_KEY_00000000";', 'utf-8');
 
     const scanner = new SecurityScanner();
-    const report = await scanner.scanSecrets(tmpDir);
+    const issues = await scanner.checkSecrets([src]);
 
-    const stripeIssues = report.issues.filter((i) =>
+    const stripeIssues = issues.filter((i) =>
       i.description.toLowerCase().includes('stripe')
     );
     expect(stripeIssues.length).toBeGreaterThan(0);
   });
 
-  it('returns empty issues for clean source', async () => {
+  it('returns empty issues for clean source file', async () => {
     const src = join(tmpDir, 'clean.ts');
     await writeFile(src, 'export const safeValue = process.env.API_KEY;', 'utf-8');
 
     const scanner = new SecurityScanner();
-    const report = await scanner.scanSecrets(tmpDir);
+    const issues = await scanner.checkSecrets([src]);
 
-    expect(report.issues).toHaveLength(0);
+    expect(issues).toHaveLength(0);
   });
 
-  it('report has issues array and lastChecked timestamp', async () => {
+  it('scan() returns SecurityReport with issues array and lastChecked', async () => {
     const scanner = new SecurityScanner();
-    const report = await scanner.scanSecrets(tmpDir);
+    const report = await scanner.scan(tmpDir);
     expect(Array.isArray(report.issues)).toBe(true);
-    expect(typeof report.lastChecked).toBe('number');
+    expect(typeof report.lastChecked).toBe('string');
+    expect(report.summary).toBeDefined();
   });
 
   it('each security issue has required fields', async () => {
@@ -140,13 +141,43 @@ describe('SecurityScanner', () => {
     await writeFile(src, 'const k = "AKIAIOSFODNN7EXAMPLE";', 'utf-8');
 
     const scanner = new SecurityScanner();
-    const report = await scanner.scanSecrets(tmpDir);
+    const issues = await scanner.checkSecrets([src]);
 
-    for (const issue of report.issues) {
+    for (const issue of issues) {
       expect(typeof issue.severity).toBe('string');
       expect(typeof issue.description).toBe('string');
       expect(typeof issue.fix).toBe('string');
     }
+  });
+
+  it('skips test files when scanning secrets', async () => {
+    const testSrc = join(tmpDir, 'config.test.ts');
+    await writeFile(testSrc, 'const k = "AKIAIOSFODNN7EXAMPLE";', 'utf-8');
+
+    const scanner = new SecurityScanner();
+    const issues = await scanner.checkSecrets([testSrc]);
+    // Test files should be filtered out
+    expect(issues).toHaveLength(0);
+  });
+
+  it('checkEnvExposure detects .env file without .gitignore entry', async () => {
+    await writeFile(join(tmpDir, '.env'), 'SECRET=abc', 'utf-8');
+    // No .gitignore
+
+    const scanner = new SecurityScanner();
+    const issues = await scanner.checkEnvExposure(tmpDir);
+    expect(issues.length).toBeGreaterThan(0);
+    expect(issues.some((i) => i.description.includes('.env'))).toBe(true);
+  });
+
+  it('checkEnvExposure is clean when .env is in .gitignore', async () => {
+    await writeFile(join(tmpDir, '.env'), 'SECRET=abc', 'utf-8');
+    await writeFile(join(tmpDir, '.gitignore'), '.env\n', 'utf-8');
+
+    const scanner = new SecurityScanner();
+    const issues = await scanner.checkEnvExposure(tmpDir);
+    const envExposureIssues = issues.filter((i) => i.description.includes("'.env' exists"));
+    expect(envExposureIssues).toHaveLength(0);
   });
 });
 
@@ -157,14 +188,17 @@ describe('SecurityScanner', () => {
 describe('TestAnalyzer', () => {
   it('finds .test.ts files', async () => {
     await mkdir(join(tmpDir, 'tests'), { recursive: true });
-    await writeFile(join(tmpDir, 'tests', 'foo.test.ts'), 'describe("x", () => { it("y", () => {}) })', 'utf-8');
+    await writeFile(
+      join(tmpDir, 'tests', 'foo.test.ts'),
+      'describe("x", () => { it("y", () => {}) })',
+      'utf-8'
+    );
 
     const analyzer = new TestAnalyzer();
     const files = await analyzer.findTests(tmpDir);
 
     expect(files.length).toBeGreaterThan(0);
-    const names = files.map((f) => f.path);
-    expect(names.some((p) => p.includes('foo.test.ts'))).toBe(true);
+    expect(files.some((f) => f.path.includes('foo.test.ts'))).toBe(true);
   });
 
   it('finds .spec.ts files', async () => {
@@ -177,7 +211,11 @@ describe('TestAnalyzer', () => {
   });
 
   it('does not include non-test ts files', async () => {
-    await writeFile(join(tmpDir, 'utils.ts'), 'export function add(a: number, b: number) { return a + b; }', 'utf-8');
+    await writeFile(
+      join(tmpDir, 'utils.ts'),
+      'export function add(a: number, b: number) { return a + b; }',
+      'utf-8'
+    );
 
     const analyzer = new TestAnalyzer();
     const files = await analyzer.findTests(tmpDir);
@@ -185,7 +223,7 @@ describe('TestAnalyzer', () => {
     expect(files.every((f) => !f.path.includes('utils.ts'))).toBe(true);
   });
 
-  it('each TestFile has path and framework fields', async () => {
+  it('each TestFile has a path field', async () => {
     await writeFile(join(tmpDir, 'x.test.ts'), 'it("a", () => {})', 'utf-8');
 
     const analyzer = new TestAnalyzer();
@@ -193,6 +231,7 @@ describe('TestAnalyzer', () => {
 
     for (const file of files) {
       expect(typeof file.path).toBe('string');
+      expect(file.path.length).toBeGreaterThan(0);
     }
   });
 
@@ -200,6 +239,17 @@ describe('TestAnalyzer', () => {
     const analyzer = new TestAnalyzer();
     const files = await analyzer.findTests(tmpDir);
     expect(files).toHaveLength(0);
+  });
+
+  it('estimates test count from file content', async () => {
+    const content = 'it("a", () => {}); it("b", () => {}); test("c", () => {})';
+    await writeFile(join(tmpDir, 'counted.test.ts'), content, 'utf-8');
+
+    const analyzer = new TestAnalyzer();
+    const files = await analyzer.findTests(tmpDir);
+    const f = files.find((f) => f.path.includes('counted.test.ts'));
+    expect(f).toBeDefined();
+    expect(f!.testCount).toBe(3);
   });
 });
 
@@ -298,5 +348,17 @@ model Category {
     const uniqueIndex = cat!.indexes!.find((i) => i.unique === true);
     expect(uniqueIndex).toBeDefined();
     expect(uniqueIndex!.columns).toContain('slug');
+  });
+
+  it('each table has name and columns array', async () => {
+    const schemaPath = join(tmpDir, 'schema.prisma');
+    await writeFile(schemaPath, SIMPLE_SCHEMA, 'utf-8');
+
+    const tools = new DatabaseTools();
+    const schema = await tools.parsePrismaSchema(schemaPath);
+    for (const table of schema.tables) {
+      expect(typeof table.name).toBe('string');
+      expect(Array.isArray(table.columns)).toBe(true);
+    }
   });
 });

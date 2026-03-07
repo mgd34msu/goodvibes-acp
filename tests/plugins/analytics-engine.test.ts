@@ -47,6 +47,13 @@ describe('AnalyticsEngine — session management', () => {
     const b = engine.ensureSession('beta');
     expect(a.sessionId).not.toBe(b.sessionId);
   });
+
+  it('session startedAt is a positive number', () => {
+    const engine = new AnalyticsEngine();
+    const session = engine.ensureSession('sess-ts');
+    expect(typeof session.startedAt).toBe('number');
+    expect(session.startedAt).toBeGreaterThan(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -91,6 +98,12 @@ describe('AnalyticsEngine — token tracking', () => {
     const session = engine.ensureSession('new-session');
     expect(session.totalTokensIn).toBe(10);
   });
+
+  it('each entry stores the toolName correctly', () => {
+    engine.track('sess-1', makeEntry('my_tool', 5, 10));
+    const session = engine.ensureSession('sess-1');
+    expect(session.entries[0].toolName).toBe('my_tool');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -110,6 +123,12 @@ describe('AnalyticsEngine — budget management', () => {
     expect(budget.totalBudget).toBe(100_000);
     expect(budget.used).toBe(0);
     expect(budget.remaining).toBe(100_000);
+  });
+
+  it('default budget has warningThreshold and alertThreshold', () => {
+    const budget = engine.getBudget('sess-thresholds');
+    expect(budget.warningThreshold).toBeGreaterThan(0);
+    expect(budget.alertThreshold).toBeGreaterThan(budget.warningThreshold);
   });
 
   it('setBudget sets the total budget', () => {
@@ -147,6 +166,21 @@ describe('AnalyticsEngine — budget management', () => {
     engine.track('sess-1', makeEntry('tool', 200, 200));
     const budget = engine.getBudget('sess-1');
     expect(budget.remaining).toBe(0);
+  });
+
+  it('getWarnings returns warning when approaching budget', () => {
+    engine.setBudget('sess-1', 1000, 0.5, 0.8);
+    engine.track('sess-1', makeEntry('tool', 600, 0)); // 60% used
+    const warnings = engine.getWarnings('sess-1');
+    expect(warnings.length).toBeGreaterThan(0);
+    expect(warnings[0]).toContain('sess-1');
+  });
+
+  it('getWarnings returns empty array when under warning threshold', () => {
+    engine.setBudget('sess-1', 1000);
+    engine.track('sess-1', makeEntry('tool', 10, 0));
+    const warnings = engine.getWarnings('sess-1');
+    expect(warnings).toHaveLength(0);
   });
 });
 
@@ -195,6 +229,20 @@ describe('AnalyticsEngine — dashboard', () => {
     const dashboard = engine.getDashboard();
     expect(dashboard.budgetUtilization['sess-1']).toBeCloseTo(0.5, 5);
   });
+
+  it('getToolBreakdown aggregates across sessions', () => {
+    const engine = new AnalyticsEngine();
+    engine.track('sess-1', makeEntry('shared_tool', 100, 200));
+    engine.track('sess-2', makeEntry('shared_tool', 50, 50));
+    const breakdown = engine.getToolBreakdown();
+    expect(breakdown['shared_tool'].calls).toBe(2);
+    expect(breakdown['shared_tool'].tokens).toBe(400);
+  });
+
+  it('getSessionAnalytics returns undefined for unknown session', () => {
+    const engine = new AnalyticsEngine();
+    expect(engine.getSessionAnalytics('ghost')).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -210,36 +258,36 @@ describe('AnalyticsEngine — export', () => {
     engine.track('sess-export', makeEntry('precision_write', 50, 75, 10));
   });
 
-  it('exports to JSON format', () => {
-    const json = engine.export('sess-export', 'json');
+  it('exportSession to JSON format produces valid JSON', () => {
+    const json = engine.exportSession('sess-export', 'json');
     expect(() => JSON.parse(json)).not.toThrow();
     const parsed = JSON.parse(json);
     expect(Array.isArray(parsed)).toBe(true);
     expect(parsed[0].sessionId).toBe('sess-export');
   });
 
-  it('exports to CSV format with header row', () => {
-    const csv = engine.export('sess-export', 'csv');
+  it('exportSession to CSV format has header row', () => {
+    const csv = engine.exportSession('sess-export', 'csv');
     const lines = csv.split('\n');
     expect(lines[0]).toBe('sessionId,timestamp,toolName,tokensIn,tokensOut,durationMs');
     expect(lines.length).toBeGreaterThanOrEqual(3); // header + 2 entries
   });
 
-  it('CSV rows contain correct data', () => {
-    const csv = engine.export('sess-export', 'csv');
+  it('CSV rows contain correct session data', () => {
+    const csv = engine.exportSession('sess-export', 'csv');
     expect(csv).toContain('precision_read');
     expect(csv).toContain('precision_write');
     expect(csv).toContain('sess-export');
   });
 
-  it('exports to Markdown format with session header', () => {
-    const md = engine.export('sess-export', 'markdown');
+  it('exportSession to Markdown format with session header', () => {
+    const md = engine.exportSession('sess-export', 'markdown');
     expect(md).toContain('## Session: sess-export');
     expect(md).toContain('Total tokens in');
     expect(md).toContain('precision_read');
   });
 
-  it('exportAll exports all sessions', () => {
+  it('exportAll exports all sessions as JSON', () => {
     const engine2 = new AnalyticsEngine();
     engine2.track('s1', makeEntry('tool', 10, 20));
     engine2.track('s2', makeEntry('tool', 30, 40));
@@ -248,7 +296,7 @@ describe('AnalyticsEngine — export', () => {
     expect(parsed.length).toBe(2);
   });
 
-  it('throws when exporting non-existent session', () => {
-    expect(() => engine.export('ghost-session', 'json')).toThrow();
+  it('exportSession throws for non-existent session', () => {
+    expect(() => engine.exportSession('ghost-session', 'json')).toThrow();
   });
 });
