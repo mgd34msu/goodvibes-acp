@@ -66,7 +66,7 @@ src/types/
 ├── errors.ts               # Error types, error codes, error categories
 ├── registry.ts             # Registry contracts — interfaces that upper layers implement
 │                           #   IReviewer, IFixer, IToolProvider, ITriggerHandler,
-│                           #   IAuthProvider, IFileSystem, ITerminal, IAgentSpawner
+│                           #   IAuthProvider, ITextFileAccess, ITerminal, IAgentSpawner
 ├── transport.ts            # Transport/stream types (ACP, MCP, IPC)
 ├── plugin.ts               # Plugin manifest types
 └── constants.ts            # Shared constants, enums, magic values
@@ -88,8 +88,12 @@ interface IFixer {
 interface IToolProvider {
   name: string;
   tools: ToolDefinition[];
-  execute(toolName: string, params: unknown): Promise<ToolResult>;
+  execute<T = unknown>(toolName: string, params: unknown): Promise<ToolResult<T>>;
 }
+
+// ToolResult<T> is a generic container. L0 defines the envelope,
+// plugins define specific payloads. Consumers cast T when they know
+// the tool type, keeping cross-plugin type coupling in L0 only.
 
 interface ITriggerHandler {
   canHandle(trigger: TriggerDefinition): boolean;
@@ -101,22 +105,37 @@ interface IAuthProvider {
   authenticate(params: AuthRequest): Promise<AuthResult>;
 }
 
-interface IFileSystem {
+interface ITextFileAccess {
   readTextFile(path: string, options?: ReadOptions): Promise<string>;
-  writeTextFile(path: string, content: string): Promise<void>;
+  writeTextFile(path: string, content: string, options?: WriteOptions): Promise<void>;
 }
+
+// Note: ITextFileAccess is intentionally narrow — editor-aware read/write
+// of text files only (seeing unsaved buffers). No exists/mkdir/stat/readDir.
+// Precision tools bypass this and use direct fs for most operations —
+// they need modes, encoding, batch writes, etc. beyond this scope.
 
 interface ITerminal {
   create(command: string, args?: string[]): Promise<TerminalHandle>;
   output(handle: TerminalHandle): Promise<string>;
+  waitForExit(handle: TerminalHandle): Promise<ExitResult>;
   kill(handle: TerminalHandle): Promise<void>;
 }
 
+// Note: ITerminal is for editor-visible operations (build, test, deploy).
+// precision_exec bypasses ITerminal and uses direct process spawning —
+// it needs background, retry, until, parallel that are beyond ITerminal's scope.
+
 interface IAgentSpawner {
   spawn(config: AgentConfig): Promise<AgentHandle>;
+  result(handle: AgentHandle): Promise<AgentResult>;
   cancel(handle: AgentHandle): Promise<void>;
   status(handle: AgentHandle): AgentStatus;
 }
+
+// Contract: result() resolves when agent completes (success or failure).
+// Callers await result() rather than listening for events — no implicit
+// event bus coupling. AgentResult contains output, files modified, errors.
 ```
 
 ---
@@ -159,7 +178,8 @@ src/core/
 │                           # - Bootstrap wires config.onChange → eventBus.emit
 │
 ├── registry.ts             # Capability registry
-│                           # - Typed register<T>(key, impl) / get<T>(key)
+│                           # - Typed register<T>(key, impl) / get<T>(key) / getAll<T>(kind)
+│                           # - Supports multi-value registration per kind (e.g., multiple IReviewers)
 │                           # - Simple Map-based — no discovery, no DI framework
 │                           # - This is HOW upper layers provide implementations
 │                           #   to lower layers without upward imports
@@ -176,11 +196,17 @@ src/core/
 │                           # - Target-based filtering
 │                           # - Persistence to disk
 │
-└── scheduler.ts            # Generic task scheduling
-                            # - Interval-based tasks
-                            # - Cron-like scheduling
-                            # - Task lifecycle (start/stop/pause)
-                            # - Concurrent task limits
+├── scheduler.ts            # Generic task scheduling
+│                           # - Interval-based tasks
+│                           # - Cron-like scheduling
+│                           # - Task lifecycle (start/stop/pause)
+│                           # - Concurrent task limits
+│
+└── hook-engine.ts          # Generic pre/post hook execution
+                            # - Register hooks by key
+                            # - Execute pre/post around any operation
+                            # - Hook ordering and priority
+                            # - NO domain knowledge — just hook lifecycle
 ```
 
 ### What L1 does NOT contain:
@@ -189,6 +215,12 @@ src/core/
 - Memory/logs (domain-specific format — belongs in L2)
 - Session manager (domain-specific lifecycle — belongs in L2)
 - Directive queue (domain-specific — L2 uses L1 generic queue)
+
+### Session-scoped events:
+- Every event carries a `sessionId` field (defined in L0)
+- Listeners filter by sessionId — session A's `agent:completed` does NOT fire session B's listener
+- L1 event bus provides generic `onFiltered(predicate, event, handler)` — no domain knowledge in L1
+- L2 wraps this with `onSession(sessionId, event, handler)` for session-scoped filtering
 
 ---
 
@@ -277,10 +309,9 @@ src/extensions/
 │                           # - Log rotation
 │                           # - Severity levels
 │
-├── hooks/                  # Hook system
-│   ├── engine.ts           # Pre/post hook execution around operations
-│   ├── registry.ts         # Register hooks by event type
-│   └── built-ins.ts        # Built-in hooks (logging, metrics)
+├── hooks/                  # Domain-specific hook handlers
+│   ├── registrar.ts        # Pre-registers GoodVibes-specific hooks into L1 hook engine at startup
+│   └── built-ins.ts        # Built-in hook handlers (logging, metrics, analytics)
 │
 ├── services/               # External service connections
 │   ├── registry.ts         # Named service registry (API keys, endpoints)
@@ -288,9 +319,12 @@ src/extensions/
 │   └── health.ts           # Service health checking
 │
 ├── external/               # External event sources
-│   ├── http-listener.ts    # Webhook receiver
-│   ├── file-watcher.ts     # File system change detection
-│   └── normalizer.ts       # Event normalization from external sources
+│   ├── http-listener.ts    # Webhook receiver (timing-safe auth, payload limits)
+│   ├── file-watcher.ts     # File system change detection (error/processed dirs)
+│   └── normalizer.ts       # Normalizer registry — pluggable per-source normalizers
+│                           # - GitHub, Slack, CI, generic normalizers
+│                           # - Each normalizer transforms source-specific payloads
+│                           #   into L0 event types for the L1 event bus
 │
 └── lifecycle/              # Process lifecycle
     ├── daemon.ts           # Daemon mode (detached, socket IPC, health)
@@ -394,21 +428,28 @@ src/
 
 The runtime supports two modes, selectable at startup:
 
-### ACP Agent Mode (primary)
+### Subprocess Mode
 - Spawned by an ACP client (Zed, VS Code) as a subprocess
 - Communicates via stdio (ndjson)
 - One process per client connection
 - Client manages the process lifecycle
+- Simplest deployment — no setup, no socket management
 
-### Daemon Mode (backward compat / advanced)
+### Daemon Mode (superset)
 - Long-running background process
-- Communicates via Unix socket or TCP
+- Accepts ACP connections over TCP/WebSocket AND MCP bridge over Unix socket
 - Survives editor restarts
-- Multiple clients connect simultaneously
+- Multiple clients connect simultaneously via ACP
 - Tick driver for heartbeats, scheduled tasks, webhook delivery
-- MCP bridge connects Claude Code to the daemon
+- MCP bridge connects Claude Code (which doesn't speak ACP natively yet)
+- Exposes health + readiness endpoints (see below)
 
-Both modes use the same L0/L1/L2/L3 stack. The only difference is which L2 transport is activated.
+Daemon mode is a **superset** of subprocess mode — not an alternative. It adds multi-client support, persistence across restarts, and background processing. Both modes use the same L0/L1/L2/L3 stack.
+
+### Health vs Readiness (daemon mode)
+- **Health** (`/health`): process is alive, event loop responsive
+- **Readiness** (`/ready`): all plugins loaded, registries populated, ready to accept work
+- Clients should wait for readiness before sending prompts
 
 ---
 
@@ -421,11 +462,11 @@ Two paths for file access, selected by transport:
 | **ACP client fs** | Connected via ACP | `fs/read_text_file`, `fs/write_text_file` through client | Yes |
 | **Direct fs** | Always available | Node/Bun `fs` module directly | No |
 
-L0 defines `IFileSystem`. L2 provides two implementations:
+L0 defines `ITextFileAccess`. L2 provides two implementations:
 - `AcpFileSystem` — proxies through ACP client methods
 - `DirectFileSystem` — direct disk access
 
-L3 plugins call `registry.get<IFileSystem>()` and don't care which one they get. The bootstrap wires the appropriate implementation based on the active transport. For ACP connections, the ACP implementation is preferred (editor-aware). For daemon/MCP bridge mode, direct fs is used.
+L3 plugins call `registry.get<ITextFileAccess>()` and don't care which one they get. The bootstrap wires the appropriate implementation based on the active transport. For ACP connections, the ACP implementation is preferred (editor-aware). For daemon/MCP bridge mode, direct fs is used.
 
 Same pattern applies to terminal access (`ITerminal`):
 - `AcpTerminal` — creates terminals visible in the editor
@@ -437,25 +478,25 @@ Rule of thumb: user-visible operations (build, test, deploy) use ACP terminal. I
 
 ## WRFC ↔ ACP Mapping
 
-WRFC phases map to ACP `session/update` notifications with `tool_call` lifecycle:
+WRFC phases map to ACP as **named pseudo-tools** — the runtime IS invoking internal tools for each phase. This fits ACP `tool_call` semantics naturally without overloading them:
 
 ```
-WRFC Phase    → ACP tool_call status    → _meta payload
-─────────────────────────────────────────────────────────
-start_work    → tool_call (pending)     → { phase: "work", attempt: 1 }
-working       → tool_call (running)     → { agent_type: "engineer" }
-work_complete → tool_call (completed)   → { files_modified: [...] }
-start_review  → tool_call (pending)     → { phase: "review" }
-reviewing     → tool_call (running)     → { reviewer: "code-review" }
-review_done   → tool_call (completed)   → { score: 8.5, dimensions: {...} }
-start_fix     → tool_call (pending)     → { phase: "fix", attempt: 2 }
-fixing        → tool_call (running)     → { issues: [...] }
-fix_complete  → tool_call (completed)   → { resolved: [...] }
-complete      → stopReason: end_turn    → { final_score: 9.9 }
-escalate      → stopReason: end_turn    → { escalation_reason: "..." }
+Pseudo-Tool          ACP tool_call status    _meta payload
+───────────────────────────────────────────────────────────
+goodvibes_work       pending                 { attempt: 1, agent_type: "engineer" }
+goodvibes_work       running                 { files: [...], progress: 0.5 }
+goodvibes_work       completed               { files_modified: [...] }
+goodvibes_review     pending                 { reviewer: "code-review" }
+goodvibes_review     running                 { dimensions_scored: 4 }
+goodvibes_review     completed               { score: 8.5, dimensions: {...} }
+goodvibes_fix        pending                 { attempt: 2, issues: [...] }
+goodvibes_fix        running                 { resolved: 3, remaining: 1 }
+goodvibes_fix        completed               { all_resolved: true }
+(prompt response)    stopReason: end_turn    { final_score: 9.9 }
+(prompt response)    stopReason: end_turn    { escalation_reason: "..." }
 ```
 
-Each WRFC chain is a single ACP prompt turn. The ACP client sees a stream of tool_call updates with rich `_meta` payloads carrying review scores, attempt counts, and phase information.
+Each WRFC chain is a single ACP prompt turn. ACP clients see tool invocations with meaningful names (`goodvibes_work`, `goodvibes_review`, `goodvibes_fix`) rather than abstract phase updates. Rich `_meta` payloads carry review scores, attempt counts, and phase information.
 
 ---
 
@@ -504,12 +545,15 @@ Shutdown tears down in reverse layer order:
 
 ```
 1. Stop accepting new connections/prompts
-2. Cancel in-progress WRFC chains (with timeout)
-3. L3: Deregister plugins, flush plugin state
-4. L2: Close ACP connections, close MCP bridge, flush memory/logs,
+2. Signal running agents to stop (graceful)
+3. Wait for agent grace period (configurable, default 10s)
+4. Force-kill any agents still running after grace period
+5. Cancel in-progress WRFC chains
+6. L3: Deregister plugins, flush plugin state
+7. L2: Close ACP connections, close MCP bridge, flush memory/logs,
        stop daemon tick driver, close IPC sockets
-5. L1: Flush state-store to disk, drain event bus, stop scheduler
-6. Exit
+8. L1: Flush state-store to disk, drain event bus, stop scheduler
+9. Exit
 ```
 
 Bootstrap registers shutdown handlers at startup. Each layer provides a `shutdown()` method that cleans up its resources.
@@ -541,7 +585,7 @@ L3: agents/spawner.ts spawns agent, returns handle
     ↓
 L2: agents/tracker.ts registers agent
     ↓
-L1: event-bus.emit('agent:completed')
+L1: wrfc/orchestrator.ts awaits spawner.result(handle)
     ↓
 L2: wrfc/machine.ts transitions to 'reviewing'
     ↓
@@ -716,11 +760,13 @@ goodvibes-acp/
 - Implement ACP agent using @agentclientprotocol/sdk
 - Map sessions, prompts, config to ACP protocol
 - Map WRFC to tool_call lifecycle
-- Test with Zed
+- Test with Zed (note: full testing blocked until subagent design resolved — Open Question 1)
 
 ### Phase 4: MCP bridge + Claude Code compat
 - Build MCP bridge for backward compatibility
-- Port hook-to-directive pipeline to bridge adapter
+- Port hook-to-directive pipeline to bridge adapter — this is the most complex subsystem:
+  SubagentStop → agent:completed → triggers → WRFC handler → directive queue →
+  UPS hook drain → additionalContext injection. Needs careful incremental porting.
 - Test with Claude Code
 
 ### Phase 5: Plugin migration
@@ -736,6 +782,98 @@ goodvibes-acp/
 
 ---
 
+## Observability (ACP Extension Methods)
+
+ACP clients inspect runtime state via custom extension methods:
+
+| Method | Returns | Purpose |
+|--------|---------|--------|
+| `_goodvibes/status` | Runtime health, uptime, active sessions, agent count | Dashboard / health check |
+| `_goodvibes/state` | Full runtime state snapshot (sessions, WRFC chains, config) | Debugging |
+| `_goodvibes/events` | Event stream (filterable by type, session) | Real-time monitoring |
+| `_goodvibes/agents` | Active agent list with status, task, duration | Agent tracking |
+| `_goodvibes/analytics` | Token usage, budget, session metrics | Cost monitoring |
+
+These are implemented in L2 as ACP extension methods (`_`-prefixed per ACP spec) that query L1 primitives.
+
+All `_goodvibes/*` responses include `_meta.version` (semver) for forward-compatible evolution.
+
+---
+
+## State Persistence Versioning
+
+All persisted state uses JSON with a `$schema` semver field:
+
+```json
+{
+  "$schema": "1.0.0",
+  "data": { ... }
+}
+```
+
+- **Migration functions per version bump** — applied automatically on load
+- **Forward-compatible reads** — ignore unknown fields
+- **Backward-compatible writes** — never drop fields without a major version bump
+- **Migration registry** — L1 config module holds version→migrator map, applied in order
+
+Decided before the first state file is written.
+
+L1 queue persistence uses the same format — all persisted data follows this pattern.
+
+---
+
+## Cross-Plugin Communication
+
+Plugins (L3) do NOT import each other. Cross-plugin communication flows through L1:
+
+- **precision needs analytics tracking** → precision emits `tool:executed` event via L1 event bus → analytics plugin listens
+- **review needs precision tools** → review calls `registry.get<IToolProvider>('precision')` via L1 registry
+- **All cross-plugin data flows through L0 types** — no plugin-specific types leak across boundaries
+
+---
+
+## Reviewer Selection
+
+Multiple `IReviewer` implementations may be registered (code-review, security-audit, accessibility-audit). The WRFC orchestrator selects reviewers by:
+
+1. **Registry key** — `registry.getAll<IReviewer>()` returns all registered reviewers
+2. **Task metadata matching** — each reviewer declares `capabilities: string[]` (e.g., `['typescript', 'security']`). Orchestrator matches against task tags.
+3. **Default fallback** — if no specific match, use the general-purpose code reviewer.
+
+For now, single reviewer. The selection mechanism is designed for future multi-reviewer support without changing the WRFC machine.
+
+---
+
+## Interface Contracts
+
+Type signatures alone don't capture implementation requirements. These contracts MUST be followed:
+
+| Interface | Contract |
+|-----------|----------|
+| `IAgentSpawner` | `result()` resolves on completion (success or failure). Caller awaits result, no implicit event bus coupling. |
+| `IReviewer` | Must return score 0-10 with per-dimension breakdown. Must not throw — return score 0 with error details instead. |
+| `IFixer` | Must be idempotent — running fix twice on same input produces same output. Must not introduce new issues. |
+| `IToolProvider` | `execute()` must handle unknown tool names gracefully (return error result, not throw). |
+| `ITextFileAccess` | Read must return latest editor state if available. Write must trigger editor refresh. |
+| `ITerminal` | `create()` must return handle even if command fails immediately. Failure surfaces via `waitForExit()`. |
+| `ITriggerHandler` | `execute()` must be idempotent. Must complete within trigger timeout (default 30s). |
+| `IAuthProvider` | Must handle auth failure without crashing. Must support cancellation. |
+
+---
+
+## Non-Goals
+
+This runtime explicitly will NOT:
+
+1. **Replace the AI model** — it orchestrates agents, it doesn't run inference
+2. **Provide a UI** — ACP clients provide the UI; the runtime is headless
+3. **Manage source control** — no built-in git operations beyond what plugins provide
+4. **Be a general-purpose workflow engine** — it's optimized for AI-assisted coding workflows
+5. **Support non-TypeScript plugins** — L3 plugins are TypeScript only (for now)
+6. **Run untrusted plugins** — no sandboxing. Plugins have full process access.
+
+---
+
 ## Open Questions
 
 1. **Subagent spawning** — ACP has no concept of "spawn a subagent." This is the biggest unsolved problem. Options:
@@ -748,4 +886,4 @@ goodvibes-acp/
 
 3. **Config location** — Global (~/.goodvibes/) for runtime config + per-project for project state.
 
-4. **State persistence format** — Need schema versioning from day 1. Define migration strategy before writing the first state file.
+

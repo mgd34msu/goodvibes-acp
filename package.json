@@ -1,0 +1,24 @@
+{
+  "name": "goodvibes-acp",
+  "version": "0.1.0",
+  "description": "GoodVibes ACP Runtime — AI coding orchestration via Agent Client Protocol",
+  "type": "module",
+  "main": "src/main.ts",
+  "scripts": {
+    "start": "bun run src/main.ts",
+    "dev": "bun --watch src/main.ts",
+    "test": "bun test",
+    "test:core": "bun test tests/core/",
+    "test:extensions": "bun test tests/extensions/",
+    "test:plugins": "bun test tests/plugins/",
+    "test:integration": "bun test tests/integration/",
+    "typecheck": "bun run tsc --noEmit",
+    "lint": "eslint src/ tests/",
+    "check": "bun run typecheck && bun run lint && bun test"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/bun": "latest"
+  }
+}
