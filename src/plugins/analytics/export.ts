@@ -133,7 +133,6 @@ export class AnalyticsExporter {
     return value;
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private _formatEntry(_entry: TokenUsageEntry): string {
     // Utility kept for potential future single-entry formatting
     return '';

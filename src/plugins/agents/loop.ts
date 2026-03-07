@@ -22,6 +22,7 @@ import type {
   ContentBlock,
   LLMToolDefinition,
 } from '../../types/llm.js';
+import type { AgentProgressEvent } from '../../types/agent.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -48,12 +49,9 @@ export interface AgentLoopConfig {
 // Progress events
 // ---------------------------------------------------------------------------
 
-export type AgentProgressEvent =
-  | { type: 'llm_start'; turn: number }
-  | { type: 'llm_complete'; turn: number; stopReason: string; usage: { inputTokens: number; outputTokens: number } }
-  | { type: 'tool_start'; turn: number; toolName: string }
-  | { type: 'tool_complete'; turn: number; toolName: string; durationMs: number }
-  | { type: 'tool_error'; turn: number; toolName: string; error: string };
+// AgentProgressEvent is defined at L0 (src/types/agent.ts) and re-exported
+// here for backward compatibility with existing consumers.
+export type { AgentProgressEvent } from '../../types/agent.js';
 
 // ---------------------------------------------------------------------------
 // Result

@@ -140,6 +140,9 @@ export class GoodVibesAgent implements Agent {
     await this.sessions.create({
       sessionId,
       cwd: params.cwd,
+      ...(params.mcpServers && params.mcpServers.length > 0
+        ? { mcpServers: params.mcpServers as unknown as import('../../types/session.js').MCPServerConfig[] }
+        : {}),
     });
 
     // Connect MCP servers if provided and bridge is available

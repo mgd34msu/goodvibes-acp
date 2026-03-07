@@ -92,6 +92,21 @@ export type AgentError = {
 };
 
 // ---------------------------------------------------------------------------
+// Agent progress events (shared with L2 MCP bridge)
+// ---------------------------------------------------------------------------
+
+/**
+ * Progress events emitted by the agent loop during execution.
+ * Defined at L0 so both L2 (extensions/mcp) and L3 (plugins/agents) can use them.
+ */
+export type AgentProgressEvent =
+  | { type: 'llm_start'; turn: number }
+  | { type: 'llm_complete'; turn: number; stopReason: string; usage: { inputTokens: number; outputTokens: number } }
+  | { type: 'tool_start'; turn: number; toolName: string }
+  | { type: 'tool_complete'; turn: number; toolName: string; durationMs: number }
+  | { type: 'tool_error'; turn: number; toolName: string; error: string };
+
+// ---------------------------------------------------------------------------
 // Agent metadata (for tracking)
 // ---------------------------------------------------------------------------
 

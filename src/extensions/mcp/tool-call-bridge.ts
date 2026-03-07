@@ -14,7 +14,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { ToolCallEmitter } from '../acp/tool-call-emitter.js';
-import type { AgentProgressEvent } from '../../plugins/agents/loop.js';
+import type { AgentProgressEvent } from '../../types/agent.js';
 
 // ---------------------------------------------------------------------------
 // McpToolCallBridge

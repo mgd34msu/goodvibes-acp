@@ -63,6 +63,25 @@ describe('SessionManager', () => {
       expect(ctx.config.mcpServers).toEqual(mcpServers);
     });
 
+    it('persists mcpServers so load() returns them intact', async () => {
+      const mcpServers = [
+        { name: 'server-a', transport: 'stdio' as const, command: 'npx', args: ['server-a'] },
+        { name: 'server-b', transport: 'stdio' as const, command: 'npx', args: ['server-b'] },
+      ];
+      await manager.create({ sessionId: 'mcp-persist-1', cwd: '/tmp', mcpServers });
+
+      const { context } = await manager.load('mcp-persist-1');
+      expect(context.config.mcpServers).toEqual(mcpServers);
+      expect(context.config.mcpServers).toHaveLength(2);
+      expect(context.config.mcpServers![0].name).toBe('server-a');
+      expect(context.config.mcpServers![1].name).toBe('server-b');
+    });
+
+    it('omits mcpServers key when not provided', async () => {
+      const ctx = await manager.create({ sessionId: 'mcp-omit-1', cwd: '/tmp' });
+      expect(ctx.config.mcpServers).toBeUndefined();
+    });
+
     it('emits session:created event', async () => {
       const events: unknown[] = [];
       bus.on('session:created', (ev) => events.push(ev.payload));
@@ -317,6 +336,72 @@ describe('SessionManager', () => {
 
     it('throws when setting state on non-existent session', async () => {
       await expect(manager.setState('ghost', 'active')).rejects.toThrow('Session not found: ghost');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Multiple sessions — isolation
+  // ---------------------------------------------------------------------------
+
+  describe('multiple sessions — isolation', () => {
+    it('concurrent sessions do not share history', async () => {
+      await manager.create({ sessionId: 'iso-1', cwd: '/a' });
+      await manager.create({ sessionId: 'iso-2', cwd: '/b' });
+
+      await manager.addHistory('iso-1', { role: 'user', content: 'msg-for-1', timestamp: 1000 });
+      await manager.addHistory('iso-2', { role: 'user', content: 'msg-for-2', timestamp: 2000 });
+
+      const ctx1 = await manager.get('iso-1');
+      const ctx2 = await manager.get('iso-2');
+
+      expect(ctx1!.history).toHaveLength(1);
+      expect(ctx1!.history[0].content).toBe('msg-for-1');
+      expect(ctx2!.history).toHaveLength(1);
+      expect(ctx2!.history[0].content).toBe('msg-for-2');
+    });
+
+    it('mode change on one session does not affect another', async () => {
+      await manager.create({ sessionId: 'iso-3', cwd: '/c', mode: 'justvibes' });
+      await manager.create({ sessionId: 'iso-4', cwd: '/d', mode: 'justvibes' });
+
+      await manager.setMode('iso-3', 'plan');
+
+      expect(await manager.getMode('iso-3')).toBe('plan');
+      expect(await manager.getMode('iso-4')).toBe('justvibes');
+    });
+
+    it('destroying one session does not affect another', async () => {
+      await manager.create({ sessionId: 'iso-5', cwd: '/e' });
+      await manager.create({ sessionId: 'iso-6', cwd: '/f' });
+
+      await manager.destroy('iso-5');
+
+      expect(await manager.get('iso-5')).toBeUndefined();
+      expect(await manager.get('iso-6')).toBeDefined();
+    });
+
+    it('state change on one session does not affect another', async () => {
+      await manager.create({ sessionId: 'iso-7', cwd: '/g' });
+      await manager.create({ sessionId: 'iso-8', cwd: '/h' });
+
+      await manager.setState('iso-7', 'active');
+
+      expect((await manager.get('iso-7'))!.state).toBe('active');
+      expect((await manager.get('iso-8'))!.state).toBe('idle');
+    });
+
+    it('list returns all sessions without duplicates after concurrent creates', async () => {
+      await manager.create({ sessionId: 'iso-9', cwd: '/i', mode: 'sandbox' });
+      await manager.create({ sessionId: 'iso-10', cwd: '/j', mode: 'vibecoding' });
+      await manager.create({ sessionId: 'iso-11', cwd: '/k', mode: 'plan' });
+
+      const summaries = await manager.list();
+      const ids = summaries.map((s) => s.id).sort();
+      expect(ids).toContain('iso-9');
+      expect(ids).toContain('iso-10');
+      expect(ids).toContain('iso-11');
+      // Each appears exactly once
+      expect(ids.filter((id) => id === 'iso-9')).toHaveLength(1);
     });
   });
 });
