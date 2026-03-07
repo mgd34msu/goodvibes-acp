@@ -238,6 +238,8 @@ export interface ITerminal {
   waitForExit(handle: TerminalHandle): Promise<ExitResult>;
   /** Forcibly kill the terminal process */
   kill(handle: TerminalHandle): Promise<void>;
+  /** Release terminal resources and clean up (kills process if running) */
+  release(handle: TerminalHandle): Promise<void>;
 }
 
 /**

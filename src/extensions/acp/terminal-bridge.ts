@@ -215,6 +215,38 @@ export class AcpTerminal implements ITerminal {
   }
 
   // -------------------------------------------------------------------------
+  // release
+  // -------------------------------------------------------------------------
+
+  /**
+   * Release a terminal and free its resources.
+   *
+   * For ACP-backed terminals: calls the ACP client's release() on the handle.
+   * For spawn-backed terminals: kills the process if still running and removes the handle.
+   */
+  async release(handle: TerminalHandle): Promise<void> {
+    const internal = this._requireHandle(handle.id);
+
+    if (internal.kind === 'acp') {
+      await internal.acpHandle.release();
+    } else {
+      // Spawn-backed: kill the process if still running
+      if (internal.process.exitCode === null) {
+        try {
+          internal.process.kill('SIGTERM');
+        } catch {
+          // Process may have already exited; ignore
+        }
+      }
+      // Clear buffers to free memory
+      internal.stdout.length = 0;
+      internal.stderr.length = 0;
+    }
+
+    this._handles.delete(handle.id);
+  }
+
+  // -------------------------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------------------------
 

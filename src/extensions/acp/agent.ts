@@ -103,6 +103,12 @@ export class GoodVibesAgent implements Agent {
       },
       agentCapabilities: {
         loadSession: true,
+        promptCapabilities: {
+          embeddedContext: true,
+          image: false,
+          audio: false,
+        },
+        mcpCapabilities: {},
       },
     };
   }

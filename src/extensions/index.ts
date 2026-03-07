@@ -13,3 +13,4 @@ export * from './logs/index.js';
 export * from './hooks/index.js';
 export * from './lifecycle/index.js';
 export * from './external/index.js';
+export * from './ipc/index.js';
