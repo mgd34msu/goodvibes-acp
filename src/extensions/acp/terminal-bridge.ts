@@ -10,7 +10,7 @@ import type { AgentSideConnection } from '@agentclientprotocol/sdk';
 import { TerminalHandle as AcpTerminalHandle } from '@agentclientprotocol/sdk';
 import type * as schema from '@agentclientprotocol/sdk';
 import type { ITerminal, TerminalHandle, ExitResult } from '../../types/registry.js';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 
 // ---------------------------------------------------------------------------
 // Internal handle union
@@ -31,8 +31,7 @@ type SpawnBackedHandle = {
   stderr: string[];
   exitCode: number | null;
   startedAt: number;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  process: ReturnType<typeof spawn>;
+  process: ChildProcess;
 };
 
 type InternalHandle = AcpBackedHandle | SpawnBackedHandle;
@@ -99,16 +98,6 @@ export class AcpTerminal implements ITerminal {
         stdio: 'pipe',
       });
 
-      proc.stdout?.on('data', (chunk: Buffer) => {
-        stdoutChunks.push(chunk.toString('utf-8'));
-      });
-      proc.stderr?.on('data', (chunk: Buffer) => {
-        stderrChunks.push(chunk.toString('utf-8'));
-      });
-      proc.on('exit', (code) => {
-        exitCode = code ?? -1;
-      });
-
       const internal: SpawnBackedHandle = {
         kind: 'spawn',
         handle,
@@ -118,6 +107,16 @@ export class AcpTerminal implements ITerminal {
         startedAt: Date.now(),
         process: proc,
       };
+
+      proc.stdout?.on('data', (chunk: Buffer) => {
+        stdoutChunks.push(chunk.toString('utf-8'));
+      });
+      proc.stderr?.on('data', (chunk: Buffer) => {
+        stderrChunks.push(chunk.toString('utf-8'));
+      });
+      proc.on('exit', (code) => {
+        internal.exitCode = code ?? -1;
+      });
 
       this._handles.set(id, internal);
     }
@@ -159,10 +158,8 @@ export class AcpTerminal implements ITerminal {
     const startedAt = Date.now();
 
     if (internal.kind === 'acp') {
-      const [exitResult, outputResult] = await Promise.all([
-        internal.acpHandle.waitForExit(),
-        internal.acpHandle.currentOutput(),
-      ]);
+      const exitResult = await internal.acpHandle.waitForExit();
+      const outputResult = await internal.acpHandle.currentOutput();
       return {
         exitCode: exitResult.exitCode ?? 0,
         stdout: outputResult.output,

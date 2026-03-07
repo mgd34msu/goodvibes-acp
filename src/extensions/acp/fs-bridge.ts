@@ -53,8 +53,12 @@ export class AcpFileSystem implements ITextFileAccess {
     }
 
     // Direct disk fallback
-    const encoding = (options?.encoding ?? 'utf-8') as BufferEncoding;
-    return readFile(path, { encoding });
+    const VALID_ENCODINGS = new Set<BufferEncoding>(['utf-8', 'utf8', 'ascii', 'base64', 'hex', 'latin1', 'binary', 'ucs-2', 'ucs2', 'utf16le']);
+    const encoding = (options?.encoding ?? 'utf-8') as string;
+    if (!VALID_ENCODINGS.has(encoding as BufferEncoding)) {
+      throw new Error(`Unsupported encoding: ${encoding}`);
+    }
+    return readFile(path, { encoding: encoding as BufferEncoding });
   }
 
   // -------------------------------------------------------------------------
@@ -79,7 +83,11 @@ export class AcpFileSystem implements ITextFileAccess {
 
     // Direct disk fallback — ensure parent directory exists
     await mkdir(dirname(path), { recursive: true });
-    const encoding = (options?.encoding ?? 'utf-8') as BufferEncoding;
-    await writeFile(path, content, { encoding });
+    const VALID_ENCODINGS = new Set<BufferEncoding>(['utf-8', 'utf8', 'ascii', 'base64', 'hex', 'latin1', 'binary', 'ucs-2', 'ucs2', 'utf16le']);
+    const encoding = (options?.encoding ?? 'utf-8') as string;
+    if (!VALID_ENCODINGS.has(encoding as BufferEncoding)) {
+      throw new Error(`Unsupported encoding: ${encoding}`);
+    }
+    await writeFile(path, content, { encoding: encoding as BufferEncoding });
   }
 }

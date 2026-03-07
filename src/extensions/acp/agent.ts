@@ -10,49 +10,53 @@ import type { Agent, AgentSideConnection } from '@agentclientprotocol/sdk';
 import type * as schema from '@agentclientprotocol/sdk';
 import { PROTOCOL_VERSION } from '@agentclientprotocol/sdk';
 import type { SessionContext } from '../../types/session.js';
+import { SessionManager } from '../sessions/manager.js';
 import { Registry } from '../../core/registry.js';
 import { EventBus } from '../../core/event-bus.js';
 import { buildConfigOptions, modeFromConfigValue, CONFIG_ID_MODE, CONFIG_ID_MODEL } from './config-adapter.js';
 import { toAcpError, ACP_ERROR_CODES } from './errors.js';
 
 // ---------------------------------------------------------------------------
-// Placeholder interfaces for parallel-built modules
+// Adapter interface
 // ---------------------------------------------------------------------------
 
 /**
- * Placeholder for SessionManager API.
- * TODO: Replace with import from ../sessions/manager.js
+ * Adapter interface for the WRFC runner.
+ *
+ * The composition root implements this to wire a WRFCOrchestrator (or any
+ * compatible runner) into the agent without creating a hard dependency on the
+ * orchestrator's full signature. This keeps the agent layer free of WRFC
+ * internals and makes the integration point explicit.
  */
-interface ISessionManager {
-  create(params: {
-    sessionId: string;
-    cwd: string;
-    mode?: string;
-    model?: string;
-  }): Promise<SessionContext>;
-  load(sessionId: string): Promise<{
-    context: SessionContext;
-    history: Array<{ role: string; content: string; timestamp: number }>;
-  }>;
-  get(sessionId: string): Promise<SessionContext | undefined>;
-  destroy(sessionId: string): Promise<void>;
-  setMode(sessionId: string, mode: string): Promise<void>;
-  getMode(sessionId: string): Promise<string>;
-  setConfigOption(sessionId: string, key: string, value: string): Promise<void>;
-  addHistory(sessionId: string, message: { role: string; content: string; timestamp: number }): Promise<void>;
-}
-
-/**
- * Placeholder for WRFCOrchestrator run interface.
- * TODO: Replace with import from ../wrfc/orchestrator.js
- */
-interface IWRFCRunner {
+interface WRFCRunner {
   run(params: {
     workId: string;
     sessionId: string;
     task: string;
     signal?: AbortSignal;
   }): Promise<{ state: string; lastScore?: { overall: number } }>;
+}
+
+// ---------------------------------------------------------------------------
+// SessionUpdate helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a typed user_message_chunk or agent_message_chunk SessionUpdate.
+ * Avoids `as` casts by constructing the discriminated union directly.
+ */
+function messageChunkUpdate(
+  updateType: 'user_message_chunk' | 'agent_message_chunk',
+  content: schema.ContentBlock,
+): schema.SessionUpdate {
+  return { sessionUpdate: updateType, content };
+}
+
+/**
+ * Build a typed session_info_update SessionUpdate.
+ */
+function sessionInfoUpdate(title: string, updatedAt: string): schema.SessionUpdate {
+  return { sessionUpdate: 'session_info_update' as const, title, updatedAt };
 }
 
 // ---------------------------------------------------------------------------
@@ -76,8 +80,8 @@ export class GoodVibesAgent implements Agent {
     private readonly conn: AgentSideConnection,
     private readonly registry: Registry,
     private readonly eventBus: EventBus,
-    private readonly sessions: ISessionManager,
-    private readonly wrfc: IWRFCRunner,
+    private readonly sessions: SessionManager,
+    private readonly wrfc: WRFCRunner,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -151,10 +155,7 @@ export class GoodVibesAgent implements Agent {
 
       await this.conn.sessionUpdate({
         sessionId: params.sessionId,
-        update: {
-          sessionUpdate: updateType,
-          content: { type: 'text', text: msg.content },
-        } as schema.SessionUpdate,
+        update: messageChunkUpdate(updateType, { type: 'text', text: msg.content }),
       });
     }
 
@@ -216,11 +217,7 @@ export class GoodVibesAgent implements Agent {
       // Emit session_info_update to signal work has started
       await this.conn.sessionUpdate({
         sessionId,
-        update: {
-          sessionUpdate: 'session_info_update',
-          title: task.slice(0, 100),
-          updatedAt: new Date().toISOString(),
-        } as schema.SessionUpdate,
+        update: sessionInfoUpdate(task.slice(0, 100), new Date().toISOString()),
       });
 
       const workId = crypto.randomUUID();
@@ -246,10 +243,7 @@ export class GoodVibesAgent implements Agent {
       // Stream result as agent message chunk
       await this.conn.sessionUpdate({
         sessionId,
-        update: {
-          sessionUpdate: 'agent_message_chunk',
-          content: { type: 'text', text: summary },
-        } as schema.SessionUpdate,
+        update: messageChunkUpdate('agent_message_chunk', { type: 'text', text: summary }),
       });
 
       // Record assistant message in history
@@ -269,11 +263,8 @@ export class GoodVibesAgent implements Agent {
       const acpErr = toAcpError(err);
       await this.conn.sessionUpdate({
         sessionId,
-        update: {
-          sessionUpdate: 'agent_message_chunk',
-          content: { type: 'text', text: `Error: ${acpErr.message}` },
-        } as schema.SessionUpdate,
-      });
+        update: messageChunkUpdate('agent_message_chunk', { type: 'text', text: `Error: ${acpErr.message}` }),
+      }).catch(() => {});
 
       return { stopReason: 'end_turn' };
     } finally {
@@ -301,7 +292,7 @@ export class GoodVibesAgent implements Agent {
    * Switch the operating mode for a session.
    */
   async setSessionMode(params: schema.SetSessionModeRequest): Promise<void> {
-    await this.sessions.setMode(params.sessionId, params.modeId);
+    await this.sessions.setMode(params.sessionId, modeFromConfigValue(params.modeId));
   }
 
   // -------------------------------------------------------------------------

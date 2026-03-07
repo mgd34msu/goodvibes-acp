@@ -13,7 +13,7 @@ import type * as schema from '@agentclientprotocol/sdk';
 // ---------------------------------------------------------------------------
 
 /** GoodVibes operating modes surfaced as an ACP config option */
-export type GoodVibesMode = 'justvibes' | 'vibecoding' | 'sandbox';
+export type GoodVibesMode = 'justvibes' | 'vibecoding' | 'sandbox' | 'plan';
 
 // ---------------------------------------------------------------------------
 // Config option IDs
@@ -62,6 +62,11 @@ export function buildConfigOptions(
         name: 'Sandbox',
         description: 'Sandbox mode for isolated, unrestricted experimentation.',
       },
+      {
+        value: 'plan',
+        name: 'Plan',
+        description: 'Plan mode for reviewing and approving actions before execution.',
+      },
     ] satisfies schema.SessionConfigSelectOption[],
   };
 
@@ -108,6 +113,7 @@ export function modeFromConfigValue(value: string): GoodVibesMode {
     case 'justvibes':
     case 'vibecoding':
     case 'sandbox':
+    case 'plan':
       return value;
     default:
       return 'justvibes';

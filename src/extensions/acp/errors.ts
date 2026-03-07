@@ -82,7 +82,7 @@ export function toAcpError(err: unknown): AcpErrorShape {
     return {
       code: ACP_ERROR_CODES.INTERNAL_ERROR,
       message: msg,
-      data: err.stack,
+      data: process.env.NODE_ENV === 'development' ? err.stack : undefined,
     };
   }
 
