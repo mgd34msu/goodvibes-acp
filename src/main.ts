@@ -28,6 +28,10 @@ import { AgentCoordinator } from './extensions/agents/coordinator.js';
 import { DirectiveQueue } from './extensions/directives/queue.js';
 import { MemoryManager } from './extensions/memory/manager.js';
 import { LogsManager } from './extensions/logs/manager.js';
+import { HookEngine } from './core/hook-engine.js';
+import { HookRegistrar } from './extensions/hooks/registrar.js';
+import { ShutdownManager } from './extensions/lifecycle/shutdown.js';
+import { HealthCheck } from './extensions/lifecycle/health.js';
 import { ReviewPlugin } from './plugins/review/index.js';
 import { AgentsPlugin } from './plugins/agents/index.js';
 
@@ -45,6 +49,7 @@ const eventBus = new EventBus();
 const stateStore = new StateStore();
 const registry = new Registry();
 const config = new Config();
+const hookEngine = new HookEngine();
 
 // ---------------------------------------------------------------------------
 // L2 extensions
@@ -57,10 +62,21 @@ const agentCoordinator = new AgentCoordinator(agentTracker, registry, eventBus, 
 const directiveQueue = new DirectiveQueue(eventBus);
 const memoryManager = new MemoryManager('.goodvibes/memory', eventBus);
 const logsManager = new LogsManager('.goodvibes/logs', eventBus);
+const hookRegistrar = new HookRegistrar(hookEngine, eventBus);
+const shutdownManager = new ShutdownManager(eventBus);
+const healthCheck = new HealthCheck(eventBus);
 
 // ---------------------------------------------------------------------------
 // L3 plugins
 // ---------------------------------------------------------------------------
+
+// Register built-in hooks (validation, lifecycle events)
+hookRegistrar.registerBuiltins();
+
+// Register shutdown handlers for core services
+shutdownManager.register('memory', 10, () => memoryManager.save());
+// wrfcOrchestrator has no destroy — WRFC state lives in memory only
+shutdownManager.register('hooks', 90, async () => { hookEngine.destroy(); });
 
 ReviewPlugin.register(registry);
 AgentsPlugin.register(registry);
@@ -151,6 +167,8 @@ const wrfcAdapter = {
 
 await memoryManager.load();
 await logsManager.ensureFiles();
+healthCheck.markReady();
+console.error('[goodvibes-acp] Health check: ready');
 
 // ---------------------------------------------------------------------------
 // ACP transport (ndjson over stdin/stdout)
@@ -176,8 +194,10 @@ console.error('[goodvibes-acp] Ready — listening for ACP messages on stdin.');
 // Graceful shutdown
 // ---------------------------------------------------------------------------
 
-function shutdown(signal: string): void {
+async function shutdown(signal: string): Promise<void> {
   console.error(`[goodvibes-acp] Received ${signal}, shutting down...`);
+  healthCheck.markShuttingDown();
+  await shutdownManager.shutdown();
   process.exit(0);
 }
 
@@ -206,3 +226,5 @@ console.error('[goodvibes-acp] Connection closed.');
 void agentCoordinator;
 void directiveQueue;
 void config;
+void hookEngine;
+void healthCheck;

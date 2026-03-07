@@ -11,3 +11,4 @@ export * from './agents/index.js';
 export * from './memory/index.js';
 export * from './logs/index.js';
 export * from './hooks/index.js';
+export * from './lifecycle/index.js';
