@@ -180,6 +180,23 @@ export class GoodVibesAgent implements Agent {
 
     const { context, history } = loaded;
 
+    // Reconnect MCP servers if bridge is available.
+    // The spec requires that MCP servers be restored on session/load so that
+    // the client's tool set is fully available without a new session.
+    // MCPServerConfig (L0 stored config) is structurally compatible with
+    // McpServerStdio for stdio transport; cast to McpServer[] for bridge.
+    if (this.mcpBridge && context.mcpServers && context.mcpServers.length > 0) {
+      const connections = await this.mcpBridge.connectServers(
+        context.mcpServers as unknown as schema.McpServer[],
+      );
+      const connectedIds = connections.map((c) => c.serverId);
+      if (connectedIds.length > 0) {
+        console.error(
+          `[GoodVibesAgent] MCP servers reconnected for session ${params.sessionId}: ${connectedIds.join(', ')}`,
+        );
+      }
+    }
+
     // Stream history back as session updates
     for (const msg of history) {
       const updateType =

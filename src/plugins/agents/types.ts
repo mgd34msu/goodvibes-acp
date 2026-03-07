@@ -24,6 +24,8 @@ export type AgentTypeConfig = {
   systemPromptPrefix: string;
   /** Default timeout in milliseconds */
   defaultTimeoutMs: number;
+  /** Maximum number of agentic turns before the loop is forced to stop */
+  maxTurns: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -38,6 +40,7 @@ export const AGENT_TYPE_CONFIGS: Record<AgentType, AgentTypeConfig> = {
     systemPromptPrefix:
       'You are a full-stack engineer. Implement the requested task completely and correctly, following existing patterns in the codebase.',
     defaultTimeoutMs: 300_000,
+    maxTurns: 50,
   },
   reviewer: {
     type: 'reviewer',
@@ -46,6 +49,7 @@ export const AGENT_TYPE_CONFIGS: Record<AgentType, AgentTypeConfig> = {
     systemPromptPrefix:
       'You are a code review specialist. Evaluate the implementation thoroughly across correctness, style, security, and maintainability. Provide a scored review.',
     defaultTimeoutMs: 180_000,
+    maxTurns: 10,
   },
   tester: {
     type: 'tester',
@@ -54,6 +58,7 @@ export const AGENT_TYPE_CONFIGS: Record<AgentType, AgentTypeConfig> = {
     systemPromptPrefix:
       'You are a testing specialist. Write comprehensive tests covering the happy path, edge cases, and error conditions.',
     defaultTimeoutMs: 300_000,
+    maxTurns: 30,
   },
   architect: {
     type: 'architect',
@@ -62,6 +67,7 @@ export const AGENT_TYPE_CONFIGS: Record<AgentType, AgentTypeConfig> = {
     systemPromptPrefix:
       'You are an architecture specialist. Design clean, scalable, and maintainable solutions with clear rationale for each decision.',
     defaultTimeoutMs: 120_000,
+    maxTurns: 15,
   },
   deployer: {
     type: 'deployer',
@@ -70,6 +76,7 @@ export const AGENT_TYPE_CONFIGS: Record<AgentType, AgentTypeConfig> = {
     systemPromptPrefix:
       'You are a deployment specialist. Configure and execute deployment pipelines safely, verifying each step before proceeding.',
     defaultTimeoutMs: 300_000,
+    maxTurns: 25,
   },
   integrator: {
     type: 'integrator',
@@ -78,5 +85,6 @@ export const AGENT_TYPE_CONFIGS: Record<AgentType, AgentTypeConfig> = {
     systemPromptPrefix:
       'You are an integration specialist. Wire together services and APIs reliably, handling authentication, error recovery, and data mapping.',
     defaultTimeoutMs: 300_000,
+    maxTurns: 30,
   },
 };

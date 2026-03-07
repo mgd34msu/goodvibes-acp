@@ -25,6 +25,7 @@ import { WRFCHandlers } from './extensions/wrfc/handlers.js';
 import { SessionAdapter } from './extensions/acp/session-adapter.js';
 import { ServiceRegistry } from './extensions/services/registry.js';
 import { McpBridge } from './extensions/mcp/bridge.js';
+import { McpToolCallBridge } from './extensions/mcp/tool-call-bridge.js';
 import { DaemonManager } from './extensions/lifecycle/daemon.js';
 import { IpcRouter } from './extensions/ipc/router.js';
 import { IpcSocketServer } from './extensions/ipc/socket.js';
@@ -41,7 +42,8 @@ import { HookRegistrar } from './extensions/hooks/registrar.js';
 import { ShutdownManager } from './extensions/lifecycle/shutdown.js';
 import { HealthCheck } from './extensions/lifecycle/health.js';
 import { ReviewPlugin } from './plugins/review/index.js';
-import { AgentsPlugin } from './plugins/agents/index.js';
+import { AgentsPlugin, AgentSpawnerPlugin } from './plugins/agents/index.js';
+import type { OnProgressFactory } from './plugins/agents/spawner.js';
 import { SkillsPlugin } from './plugins/skills/index.js';
 import { PrecisionPlugin } from './plugins/precision/index.js';
 import { AnalyticsPlugin } from './plugins/analytics/index.js';
@@ -103,6 +105,10 @@ shutdownManager.register('daemon', 50, () => daemonManager.stop());
 
 ReviewPlugin.register(registry);
 AgentsPlugin.register(registry);
+// Re-register the agent spawner with the McpToolCallBridge progress factory
+// so AgentLoop tool executions emit ACP tool_call updates in real time.
+registry.unregister('agent-spawner');
+registry.register('agent-spawner', new AgentSpawnerPlugin(registry, onProgressFactory));
 SkillsPlugin.register(registry);
 PrecisionPlugin.register(registry);
 AnalyticsPlugin.register(registry);
@@ -149,6 +155,19 @@ const daemonManager = new DaemonManager(eventBus);
 // ---------------------------------------------------------------------------
 
 let toolCallEmitter: InstanceType<typeof ToolCallEmitter> | null = null;
+
+// ---------------------------------------------------------------------------
+// McpToolCallBridge — bridges AgentLoop onProgress to ACP tool_call updates
+//
+// Created before plugin registration so it can be passed as onProgressFactory
+// to AgentSpawnerPlugin. The emitter getter is lazy — it resolves to null
+// until createConnection() sets toolCallEmitter for the active connection.
+// ---------------------------------------------------------------------------
+
+const mcpToolCallBridge = new McpToolCallBridge(() => toolCallEmitter);
+
+const onProgressFactory: OnProgressFactory = (sessionId: string) =>
+  mcpToolCallBridge.makeProgressHandler(sessionId);
 
 // ---------------------------------------------------------------------------
 // createConnection — shared helper for subprocess and daemon modes

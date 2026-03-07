@@ -23,7 +23,20 @@ import type { IAgentSpawner, ILLMProvider, IToolProvider } from '../../types/reg
 import type { Registry } from '../../core/registry.js';
 import { AGENT_TYPE_CONFIGS } from './types.js';
 import { AgentLoop } from './loop.js';
-import type { AgentLoopResult } from './loop.js';
+import type { AgentLoopResult, AgentProgressEvent } from './loop.js';
+
+// ---------------------------------------------------------------------------
+// OnProgressFactory
+// ---------------------------------------------------------------------------
+
+/**
+ * Factory that returns a per-session progress handler for an AgentLoop.
+ * Injected at construction time so the spawner can provide ACP visibility
+ * for tool executions without depending on ACP types directly.
+ */
+export type OnProgressFactory = (
+  sessionId: string,
+) => ((event: AgentProgressEvent) => void) | undefined;
 
 // ---------------------------------------------------------------------------
 // Internal state type
@@ -57,14 +70,21 @@ type AgentState = {
 export class AgentSpawnerPlugin implements IAgentSpawner {
   private readonly _agents = new Map<string, AgentState>();
   private readonly _registry: Registry | undefined;
+  private readonly _onProgressFactory: OnProgressFactory | undefined;
 
   /**
-   * @param registry — optional L1 Registry. When provided and an
-   * ILLMProvider is registered under 'llm-provider', spawn() creates a real
-   * AgentLoop. Otherwise falls back to the timer-based stub.
+   * @param registry           — optional L1 Registry. When provided and an
+   *                             ILLMProvider is registered under 'llm-provider',
+   *                             spawn() creates a real AgentLoop. Otherwise
+   *                             falls back to the timer-based stub.
+   * @param onProgressFactory  — optional factory to create a per-session
+   *                             AgentLoop onProgress callback. Used to wire
+   *                             ACP tool_call updates for tool execution
+   *                             visibility (e.g. McpToolCallBridge).
    */
-  constructor(registry?: Registry) {
+  constructor(registry?: Registry, onProgressFactory?: OnProgressFactory) {
     this._registry = registry;
+    this._onProgressFactory = onProgressFactory;
   }
 
   // -------------------------------------------------------------------------
@@ -118,8 +138,9 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
         tools: toolProviders,
         model,
         systemPrompt,
-        maxTurns: 50,
+        maxTurns: typeConfig.maxTurns,
         signal: controller.signal,
+        onProgress: this._onProgressFactory?.(config.sessionId),
       });
 
       // Run in background — state machine fires when it settles
