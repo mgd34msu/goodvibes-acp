@@ -22,6 +22,14 @@ import type { WRFCConfig } from './types/wrfc.js';
 import { GoodVibesAgent } from './extensions/acp/agent.js';
 import type { AgentConfig, AgentHandle, AgentResult } from './types/agent.js';
 import type { ReviewResult, WorkResult, FixResult } from './types/registry.js';
+import type { IAgentSpawner, IReviewer, IFixer } from './types/registry.js';
+import { AgentTracker } from './extensions/agents/tracker.js';
+import { AgentCoordinator } from './extensions/agents/coordinator.js';
+import { DirectiveQueue } from './extensions/directives/queue.js';
+import { MemoryManager } from './extensions/memory/manager.js';
+import { LogsManager } from './extensions/logs/manager.js';
+import { ReviewPlugin } from './plugins/review/index.js';
+import { AgentsPlugin } from './plugins/agents/index.js';
 
 // ---------------------------------------------------------------------------
 // Startup banner
@@ -44,6 +52,19 @@ const config = new Config();
 
 const sessionManager = new SessionManager(stateStore, eventBus);
 
+const agentTracker = new AgentTracker(stateStore, eventBus);
+const agentCoordinator = new AgentCoordinator(agentTracker, registry, eventBus, { maxParallel: 6 });
+const directiveQueue = new DirectiveQueue(eventBus);
+const memoryManager = new MemoryManager('.goodvibes/memory', eventBus);
+const logsManager = new LogsManager('.goodvibes/logs', eventBus);
+
+// ---------------------------------------------------------------------------
+// L3 plugins
+// ---------------------------------------------------------------------------
+
+ReviewPlugin.register(registry);
+AgentsPlugin.register(registry);
+
 const wrfcConfig: WRFCConfig = {
   minReviewScore: 9.5,
   maxAttempts: 3,
@@ -65,62 +86,47 @@ const wrfcAdapter = {
     const runParams: WRFCRunParams = {
       ...params,
 
-      // Stub spawner — returns a no-op handle that resolves immediately.
-      // A future L3 plugin will replace this with a real agent spawner.
+      // Real spawner — delegates to the L3 AgentSpawnerPlugin via registry.
       spawner: {
         async spawn(agentConfig: AgentConfig): Promise<AgentHandle> {
-          return {
-            id: agentConfig.task?.slice(0, 8) ?? 'stub',
-            type: agentConfig.type,
-            spawnedAt: Date.now(),
-          };
+          return registry.get<IAgentSpawner>('agent-spawner')!.spawn(agentConfig);
         },
-        async result(_handle: AgentHandle): Promise<AgentResult> {
-          return {
-            handle: _handle,
-            status: 'completed',
-            output: '',
-            filesModified: [],
-            errors: [],
-            durationMs: 0,
-          };
+        async result(handle: AgentHandle): Promise<AgentResult> {
+          return registry.get<IAgentSpawner>('agent-spawner')!.result(handle);
         },
-        async cancel(_handle: AgentHandle): Promise<void> {
-          // no-op
+        async cancel(handle: AgentHandle): Promise<void> {
+          return registry.get<IAgentSpawner>('agent-spawner')!.cancel(handle);
         },
-        status(_handle: AgentHandle) {
-          return 'completed' as const;
+        status(handle: AgentHandle) {
+          return registry.get<IAgentSpawner>('agent-spawner')!.status(handle);
         },
       },
 
-      // Stub reviewer — auto-approves with a perfect score.
-      // A future L3 plugin will replace this with a real reviewer.
+      // Real reviewer — delegates to the first registered L3 CodeReviewer.
       reviewer: {
-        id: 'stub-reviewer',
+        id: 'registry-reviewer',
         capabilities: [],
         async review(workResult: WorkResult): Promise<ReviewResult> {
-          return {
-            sessionId: workResult.sessionId,
-            score: 10,
-            dimensions: {},
-            passed: true,
-            issues: [],
-            notes: 'Auto-approved (no reviewer configured)',
-          };
+          const reviewers = registry.getAll<IReviewer>('reviewer');
+          const reviewer = reviewers.values().next().value;
+          if (!reviewer) {
+            return {
+              sessionId: workResult.sessionId,
+              score: 10,
+              dimensions: {},
+              passed: true,
+              issues: [],
+              notes: 'No reviewer configured',
+            };
+          }
+          return reviewer.review(workResult);
         },
       },
 
-      // Stub fixer — returns the work result unchanged.
-      // A future L3 plugin will replace this with a real fixer.
+      // Real fixer — delegates to the L3 CodeFixer via registry.
       fixer: {
-        async fix(_reviewResult: ReviewResult): Promise<FixResult> {
-          return {
-            sessionId: _reviewResult.sessionId,
-            success: true,
-            filesModified: [],
-            resolvedIssues: [],
-            remainingIssues: [],
-          };
+        async fix(reviewResult: ReviewResult): Promise<FixResult> {
+          return registry.get<IFixer>('fixer')!.fix(reviewResult);
         },
       },
 
@@ -138,6 +144,13 @@ const wrfcAdapter = {
     return { state: result.state, lastScore: result.lastScore };
   },
 };
+
+// ---------------------------------------------------------------------------
+// Startup: load memory and ensure log files exist
+// ---------------------------------------------------------------------------
+
+await memoryManager.load();
+await logsManager.ensureFiles();
 
 // ---------------------------------------------------------------------------
 // ACP transport (ndjson over stdin/stdout)
@@ -189,6 +202,7 @@ await conn.closed;
 
 console.error('[goodvibes-acp] Connection closed.');
 
-// Suppress unused variable warnings for L1 primitives wired into the runtime
-void stateStore;
+// Suppress unused variable warnings for wired-but-unreferenced instances
+void agentCoordinator;
+void directiveQueue;
 void config;
