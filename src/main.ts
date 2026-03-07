@@ -20,6 +20,13 @@ import { WRFCOrchestrator } from './extensions/wrfc/orchestrator.js';
 import type { WRFCRunParams } from './extensions/wrfc/orchestrator.js';
 import type { WRFCConfig } from './types/wrfc.js';
 import { GoodVibesAgent } from './extensions/acp/agent.js';
+import { WRFCHandlers } from './extensions/wrfc/handlers.js';
+import { SessionAdapter } from './extensions/acp/session-adapter.js';
+import { ServiceRegistry } from './extensions/services/registry.js';
+import { McpBridge } from './extensions/mcp/bridge.js';
+import { DaemonManager } from './extensions/lifecycle/daemon.js';
+import { IpcRouter } from './extensions/ipc/router.js';
+import { IpcSocketServer } from './extensions/ipc/socket.js';
 import type { AgentConfig, AgentHandle, AgentResult } from './types/agent.js';
 import type { ReviewResult, WorkResult, FixResult } from './types/registry.js';
 import type { IAgentSpawner, IReviewer, IFixer } from './types/registry.js';
@@ -34,6 +41,11 @@ import { ShutdownManager } from './extensions/lifecycle/shutdown.js';
 import { HealthCheck } from './extensions/lifecycle/health.js';
 import { ReviewPlugin } from './plugins/review/index.js';
 import { AgentsPlugin } from './plugins/agents/index.js';
+import { SkillsPlugin } from './plugins/skills/index.js';
+import { PrecisionPlugin } from './plugins/precision/index.js';
+import { AnalyticsPlugin } from './plugins/analytics/index.js';
+import { ProjectPlugin } from './plugins/project/index.js';
+import { FrontendPlugin } from './plugins/frontend/index.js';
 
 // ---------------------------------------------------------------------------
 // Startup banner
@@ -77,9 +89,18 @@ hookRegistrar.registerBuiltins();
 shutdownManager.register('memory', 10, () => memoryManager.save());
 // wrfcOrchestrator has no destroy — WRFC state lives in memory only
 shutdownManager.register('hooks', 90, async () => { hookEngine.destroy(); });
+shutdownManager.register('mcp-bridge', 20, () => mcpBridge.disconnectAll());
+shutdownManager.register('service-registry', 30, () => serviceRegistry.save());
+shutdownManager.register('ipc-socket', 40, () => ipcSocketServer.stop());
+shutdownManager.register('daemon', 50, () => daemonManager.stop());
 
 ReviewPlugin.register(registry);
 AgentsPlugin.register(registry);
+SkillsPlugin.register(registry);
+PrecisionPlugin.register(registry);
+AnalyticsPlugin.register(registry);
+ProjectPlugin.register(registry);
+FrontendPlugin.register(registry);
 
 const wrfcConfig: WRFCConfig = {
   minReviewScore: 9.5,
@@ -88,6 +109,33 @@ const wrfcConfig: WRFCConfig = {
 };
 
 const wrfcOrchestrator = new WRFCOrchestrator(wrfcConfig, eventBus);
+const wrfcHandlers = new WRFCHandlers(eventBus, directiveQueue);
+wrfcHandlers.register();
+
+// ---------------------------------------------------------------------------
+// IPC
+// ---------------------------------------------------------------------------
+
+const ipcRouter = new IpcRouter(eventBus);
+const ipcSocketServer = new IpcSocketServer(eventBus, ipcRouter);
+
+// ---------------------------------------------------------------------------
+// Service registry
+// ---------------------------------------------------------------------------
+
+const serviceRegistry = new ServiceRegistry('.goodvibes', eventBus);
+
+// ---------------------------------------------------------------------------
+// MCP bridge
+// ---------------------------------------------------------------------------
+
+const mcpBridge = new McpBridge(eventBus);
+
+// ---------------------------------------------------------------------------
+// Daemon manager
+// ---------------------------------------------------------------------------
+
+const daemonManager = new DaemonManager(eventBus);
 
 // ---------------------------------------------------------------------------
 // WRFC adapter — bridges IWRFCRunner (agent.ts) to WRFCOrchestrator.run()
@@ -188,6 +236,9 @@ const conn = new acp.AgentSideConnection(
   stream,
 );
 
+const sessionAdapter = new SessionAdapter(conn, sessionManager, eventBus);
+sessionAdapter.register();
+
 console.error('[goodvibes-acp] Ready — listening for ACP messages on stdin.');
 
 // ---------------------------------------------------------------------------
@@ -228,3 +279,8 @@ void directiveQueue;
 void config;
 void hookEngine;
 void healthCheck;
+void wrfcHandlers;
+void ipcRouter;
+void serviceRegistry;
+void mcpBridge;
+void daemonManager;
