@@ -88,6 +88,22 @@ const shutdownManager = new ShutdownManager(eventBus);
 const healthCheck = new HealthCheck(eventBus);
 
 // ---------------------------------------------------------------------------
+// ToolCallEmitter — lazily assigned after conn is created
+// McpToolCallBridge — bridges AgentLoop onProgress to ACP tool_call updates
+//
+// Declared here (before L3 plugin registration) so onProgressFactory can be
+// passed to AgentSpawnerPlugin at registration time. The emitter getter is
+// lazy — it resolves to null until createConnection() sets toolCallEmitter.
+// ---------------------------------------------------------------------------
+
+let toolCallEmitter: InstanceType<typeof ToolCallEmitter> | null = null;
+
+const mcpToolCallBridge = new McpToolCallBridge(() => toolCallEmitter);
+
+const onProgressFactory: OnProgressFactory = (sessionId: string) =>
+  mcpToolCallBridge.makeProgressHandler(sessionId);
+
+// ---------------------------------------------------------------------------
 // L3 plugins
 // ---------------------------------------------------------------------------
 
@@ -150,24 +166,7 @@ const mcpBridge = new McpBridge(eventBus);
 
 const daemonManager = new DaemonManager(eventBus);
 
-// ---------------------------------------------------------------------------
-// ToolCallEmitter — lazily assigned after conn is created
-// ---------------------------------------------------------------------------
 
-let toolCallEmitter: InstanceType<typeof ToolCallEmitter> | null = null;
-
-// ---------------------------------------------------------------------------
-// McpToolCallBridge — bridges AgentLoop onProgress to ACP tool_call updates
-//
-// Created before plugin registration so it can be passed as onProgressFactory
-// to AgentSpawnerPlugin. The emitter getter is lazy — it resolves to null
-// until createConnection() sets toolCallEmitter for the active connection.
-// ---------------------------------------------------------------------------
-
-const mcpToolCallBridge = new McpToolCallBridge(() => toolCallEmitter);
-
-const onProgressFactory: OnProgressFactory = (sessionId: string) =>
-  mcpToolCallBridge.makeProgressHandler(sessionId);
 
 // ---------------------------------------------------------------------------
 // createConnection — shared helper for subprocess and daemon modes
