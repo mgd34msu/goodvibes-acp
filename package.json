@@ -16,7 +16,10 @@
     "lint": "eslint src/ tests/",
     "check": "bun run typecheck && bun run lint && bun test"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^0.15.0",
+    "zod": "^4.3.6"
+  },
   "devDependencies": {
     "typescript": "^5.7.0",
     "@types/bun": "latest"

@@ -108,6 +108,12 @@ export type WRFCContext = {
   startedAt: number;
   /** Unix timestamp (ms) when the chain completed or was escalated */
   finishedAt?: number;
+  /**
+   * Unix timestamp (ms) when the chain was cancelled via AbortSignal.
+   * Present only when the chain was aborted; distinguishes cancellation
+   * from a genuine escalation (repeated review failures).
+   */
+  cancelledAt?: number;
 };
 
 // ---------------------------------------------------------------------------
