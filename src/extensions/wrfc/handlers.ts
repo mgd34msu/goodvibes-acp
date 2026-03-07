@@ -72,41 +72,59 @@ export class WRFCHandlers {
     if (this._subscriptions.length > 0) return;
 
     this._subscriptions = [
-      this.eventBus.on('wrfc:state-changed', (event) =>
-        this._onStateChanged(
-          event.payload as { workId: string; sessionId: string; from: WRFCState; to: WRFCState; attempt: number },
-        ),
-      ),
+      this.eventBus.on('wrfc:state-changed', (event) => {
+        const p = event.payload;
+        if (!p || typeof p !== 'object' || !('workId' in p) || !('sessionId' in p)) {
+          console.error('[WRFCHandlers] Malformed wrfc:state-changed payload', p);
+          return;
+        }
+        this._onStateChanged(p as { workId: string; sessionId: string; from: WRFCState; to: WRFCState; attempt: number });
+      }),
 
-      this.eventBus.on('wrfc:work-complete', (event) =>
-        this._onWorkComplete(
-          event.payload as { workId: string; sessionId: string; filesModified: string[] },
-        ),
-      ),
+      this.eventBus.on('wrfc:work-complete', (event) => {
+        const p = event.payload;
+        if (!p || typeof p !== 'object' || !('workId' in p) || !('sessionId' in p)) {
+          console.error('[WRFCHandlers] Malformed wrfc:work-complete payload', p);
+          return;
+        }
+        this._onWorkComplete(p as { workId: string; sessionId: string; filesModified: string[] });
+      }),
 
-      this.eventBus.on('wrfc:review-complete', (event) =>
-        this._onReviewComplete(
-          event.payload as { workId: string; sessionId: string; score: number; passed: boolean },
-        ),
-      ),
+      this.eventBus.on('wrfc:review-complete', (event) => {
+        const p = event.payload;
+        if (!p || typeof p !== 'object' || !('workId' in p) || !('sessionId' in p)) {
+          console.error('[WRFCHandlers] Malformed wrfc:review-complete payload', p);
+          return;
+        }
+        this._onReviewComplete(p as { workId: string; sessionId: string; score: number; passed: boolean });
+      }),
 
-      this.eventBus.on('wrfc:fix-complete', (event) =>
-        this._onFixComplete(
-          event.payload as { workId: string; sessionId: string; resolvedIssues: string[] },
-        ),
-      ),
+      this.eventBus.on('wrfc:fix-complete', (event) => {
+        const p = event.payload;
+        if (!p || typeof p !== 'object' || !('workId' in p) || !('sessionId' in p)) {
+          console.error('[WRFCHandlers] Malformed wrfc:fix-complete payload', p);
+          return;
+        }
+        this._onFixComplete(p as { workId: string; sessionId: string; resolvedIssues: string[] });
+      }),
 
-      this.eventBus.on('wrfc:chain-complete', (event) =>
-        this._onChainComplete(
-          event.payload as { workId: string; sessionId: string; finalState: WRFCState; score?: number },
-        ),
-      ),
+      this.eventBus.on('wrfc:chain-complete', (event) => {
+        const p = event.payload;
+        if (!p || typeof p !== 'object' || !('workId' in p) || !('sessionId' in p)) {
+          console.error('[WRFCHandlers] Malformed wrfc:chain-complete payload', p);
+          return;
+        }
+        this._onChainComplete(p as { workId: string; sessionId: string; finalState: WRFCState; score?: number });
+      }),
 
-      this.eventBus.on('wrfc:cancelled', (event) =>
-        this._onCancelled(
-          event.payload as { workId: string; sessionId: string },
-        ),
-      ),
+      this.eventBus.on('wrfc:cancelled', (event) => {
+        const p = event.payload;
+        if (!p || typeof p !== 'object' || !('workId' in p) || !('sessionId' in p)) {
+          console.error('[WRFCHandlers] Malformed wrfc:cancelled payload', p);
+          return;
+        }
+        this._onCancelled(p as { workId: string; sessionId: string });
+      }),
     ];
   }
 

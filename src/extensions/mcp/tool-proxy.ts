@@ -67,7 +67,12 @@ export class McpToolProxy implements IToolProvider {
   // -------------------------------------------------------------------------
 
   /**
-   * Execute a named MCP tool.
+   * Execute a named MCP tool and return a ToolResult envelope.
+   *
+   * ACP visibility note: This method does NOT emit tool_call / tool_call_update
+   * session notifications. ACP notification lifecycle is the responsibility of
+   * McpToolCallBridge (src/extensions/mcp/tool-call-bridge.ts), which hooks into
+   * AgentLoop.onProgress events to emit the appropriate session updates.
    *
    * @param toolName - Namespaced tool name: `{serverId}__{toolName}`
    * @param params   - Tool input parameters

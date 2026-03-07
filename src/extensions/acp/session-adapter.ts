@@ -182,8 +182,13 @@ export class SessionAdapter {
   ): Promise<void> {
     try {
       await this.conn.sessionUpdate({ sessionId, update });
-    } catch {
-      // Connection may be closed — swallow silently
+    } catch (err: unknown) {
+      // Connection-closed errors are expected for fire-and-forget notifications
+      const msg = err instanceof Error ? err.message : String(err);
+      const isConnectionClosed = msg.includes('closed') || msg.includes('disposed') || msg.includes('destroyed');
+      if (!isConnectionClosed) {
+        console.error('[SessionAdapter] sessionUpdate failed:', msg);
+      }
     }
   }
 }

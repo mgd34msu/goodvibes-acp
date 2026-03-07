@@ -41,6 +41,13 @@ import type { AgentProgressEvent } from '../../types/agent.js';
  * });
  * ```
  */
+/**
+ * Status terminology note:
+ * - ACP SDK (v0.15.0) ToolCallStatus = 'pending' | 'in_progress' | 'completed' | 'failed'
+ * - KB 06-tools-mcp.md uses 'running' instead of 'in_progress', 'error' appears in 04-prompt-turn.md
+ * - This implementation follows the SDK type definitions as the authoritative source
+ *   since the SDK enforces these values at compile time.
+ */
 export class McpToolCallBridge {
   constructor(private readonly _getEmitter: () => ToolCallEmitter | null) {}
 

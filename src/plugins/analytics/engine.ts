@@ -22,7 +22,20 @@ import { AnalyticsDashboard } from './dashboard.js';
 import { AnalyticsExporter } from './export.js';
 import { SessionSync } from './sync.js';
 
-/** Unified analytics engine — composes all analytics sub-systems */
+/**
+ * Analytics engine for tracking token usage, budgets, and session metrics.
+ *
+ * Currently operates as an internal service — not directly accessible via ACP.
+ * The ACP spec defines `_goodvibes/analytics` as an extension method
+ * (KB 08-extensibility.md). To expose analytics via ACP:
+ *
+ * Option A: Implement IToolProvider (name, tools, execute) for tool-based access
+ * Option B: Register a `_goodvibes/analytics` handler in GoodVibesAgent.extMethod()
+ *
+ * The GoodVibesExtensions class (src/extensions/acp/extensions.ts) already has
+ * a `_analytics()` handler that delegates to this engine — it just needs to be
+ * wired into the agent's extMethod dispatch.
+ */
 export class AnalyticsEngine {
   private readonly _store: AnalyticsStore;
   private readonly _budget: BudgetTracker;

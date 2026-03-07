@@ -119,6 +119,11 @@ shutdownManager.register('service-registry', 30, () => serviceRegistry.save());
 shutdownManager.register('ipc-socket', 40, () => ipcSocketServer.stop());
 shutdownManager.register('daemon', 50, () => daemonManager.stop());
 
+// L3 plugin teardown (priority < 10 = before L2 services)
+shutdownManager.register('analytics-plugin', 5, async () => { await AnalyticsPlugin.shutdown?.(); });
+shutdownManager.register('project-plugin', 6, async () => { await ProjectPlugin.shutdown?.(); });
+shutdownManager.register('frontend-plugin', 7, async () => { await FrontendPlugin.shutdown?.(); });
+
 ReviewPlugin.register(registry);
 AgentsPlugin.register(registry);
 // Re-register the agent spawner with the McpToolCallBridge progress factory

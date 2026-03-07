@@ -19,7 +19,19 @@ import type {
   BreakpointConfig,
 } from './types.js';
 
-/** Unified frontend analysis facade */
+/**
+ * Frontend analysis engine for accessibility, framework detection, and layout analysis.
+ *
+ * Currently operates as an internal service — not directly accessible via ACP.
+ * To expose via ACP, either:
+ *
+ * Option A: Implement IToolProvider (name, tools, execute) for tool-based access
+ * Option B: Register a `_goodvibes/frontend` extension method handler
+ *
+ * This class is intentionally decoupled from ACP transport — callers
+ * (e.g., PrecisionPlugin or a future FrontendPlugin) are responsible for
+ * bridging between ACP tool calls and this analyzer's methods.
+ */
 export class FrontendAnalyzer {
   private readonly components: ComponentAnalyzer;
   private readonly a11y: AccessibilityChecker;

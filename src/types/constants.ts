@@ -35,6 +35,9 @@ export const RUNTIME_VERSION = '0.1.0' as const;
 /** State persistence schema version */
 export const STATE_SCHEMA_VERSION = '1.0.0' as const;
 
+/** ACP protocol version — spec states integer-only MAJOR versioning */
+export const ACP_PROTOCOL_VERSION = 1 as const;
+
 // ---------------------------------------------------------------------------
 // Default configuration values
 // ---------------------------------------------------------------------------

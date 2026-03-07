@@ -48,6 +48,20 @@ export type PermissionRequest = {
 // PermissionResult
 // ---------------------------------------------------------------------------
 
+/**
+ * Normalised internal status derived from the ACP wire `{ granted: boolean }` response.
+ *
+ * Mapping:
+ *   'granted' → `{ granted: true }`
+ *   'denied'  → `{ granted: false }`
+ */
+export type PermissionStatus = 'granted' | 'denied';
+
+/** Convert ACP wire `{ granted: boolean }` to internal PermissionStatus. */
+export function fromGrantedBoolean(granted: boolean): PermissionStatus {
+  return granted ? 'granted' : 'denied';
+}
+
 /** The outcome of a permission check. */
 export type PermissionResult = {
   /** True when the action was approved, false when denied. */

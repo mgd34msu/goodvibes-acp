@@ -201,10 +201,14 @@ export class McpBridge {
     if ('command' in server) {
       // McpServerStdio
       const stdio = server as McpServerStdio;
+      /**
+       * ACP SDK defines McpServerStdio.env as EnvVariable[] ({ name, value }[]).
+       * createMcpStdioTransport expects a plain Record<string, string> — convert here.
+       * We avoid the inline cast by iterating with explicit property access.
+       */
       const env: Record<string, string> = {};
       for (const v of stdio.env ?? []) {
-        // EnvVariable has { name: string; value: string } shape
-        env[v.name] = (v as { name: string; value: string }).value;
+        env[v.name] = v.value;
       }
       return createMcpStdioTransport({
         name: stdio.name,

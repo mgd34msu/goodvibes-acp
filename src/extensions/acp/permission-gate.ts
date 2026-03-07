@@ -66,6 +66,12 @@ const OPTION_REJECT_ONCE = 'reject_once';
 
 /**
  * Build the standard allow/reject permission option set for an ACP request.
+ *
+ * SDK divergence note (ISS-014): The ACP wire spec uses simple `{ granted: boolean }`
+ * responses, but the SDK (v0.15.0) requires an options-based model with
+ * `PermissionOption[]` and outcome-based responses. These helper functions bridge
+ * that gap. If the SDK aligns with the wire spec in a future version, these
+ * functions can be removed in favor of a direct `response.granted` boolean check.
  */
 function buildPermissionOptions(): acp.PermissionOption[] {
   return [
@@ -76,6 +82,12 @@ function buildPermissionOptions(): acp.PermissionOption[] {
 
 /**
  * Interpret an ACP RequestPermissionOutcome as a simple granted flag.
+ *
+ * SDK divergence note (ISS-014): The ACP wire spec uses simple `{ granted: boolean }`
+ * responses, but the SDK (v0.15.0) requires an options-based model with
+ * `PermissionOption[]` and outcome-based responses. These helper functions bridge
+ * that gap. If the SDK aligns with the wire spec in a future version, these
+ * functions can be removed in favor of a direct `response.granted` boolean check.
  *
  * Granted when:
  * - outcome is 'selected' AND the selected optionId has kind allow_once or allow_always
@@ -146,6 +158,12 @@ export class PermissionGate {
     }
 
     // 4. Prompt the ACP client using the SDK's structured permission request
+    // SDK/Spec divergence (ISS-013): The ACP wire spec defines requestPermission as
+    // { sessionId, permission: { type, title, description } } → { granted: boolean }.
+    // The SDK (v0.15.0) instead uses { sessionId, options: PermissionOption[], toolCall }
+    // → { outcome: { outcome, optionId } }. We follow the SDK API since it's the actual
+    // TypeScript interface we compile against. When the SDK aligns with the wire spec,
+    // this code should be simplified to use the boolean response directly.
     try {
       const toolCallId = request.toolCallId ?? randomUUID();
       const response = await this.conn.requestPermission({

@@ -30,15 +30,15 @@ export type IpcHandler = (
 // ---------------------------------------------------------------------------
 
 /**
- * Routes IPC requests to registered handlers.
+ * Internal runtime IPC router for inter-process communication.
  *
- * @example
- * ```typescript
- * const router = new IpcRouter(eventBus);
- * router.register('echo', (req) => req.payload);
+ * This router serves internal runtime messages (ping, status, etc.) between
+ * daemon processes. It does NOT handle ACP protocol methods (initialize,
+ * session/new, session/prompt, etc.) — those are routed by the SDK's
+ * AgentSideConnection which delegates to the Agent interface (GoodVibesAgent).
  *
- * const response = await router.route(request);
- * ```
+ * To add ACP method proxying (e.g., for a daemon→agent gateway), register
+ * handlers that forward to GoodVibesAgent via the AgentSideConnection.
  */
 export class IpcRouter {
   private readonly _eventBus: EventBus;

@@ -39,6 +39,8 @@ export type SessionEventType =
   | 'session:activated'
   | 'session:prompt'
   | 'session:updated'
+  | 'session:state-changed'
+  | 'session:mode-changed'
   | 'session:cancelled'
   | 'session:completed'
   | 'session:destroyed';
@@ -139,6 +141,26 @@ export type SessionUpdatedPayload = {
   changes: Record<string, unknown>;
 };
 
+/**
+ * Payload for session:state-changed.
+ * `from` and `to` are SessionState string literals ('idle' | 'active' | 'cancelled' | 'completed').
+ */
+export type SessionStateChangedPayload = {
+  sessionId: string;
+  from: string;
+  to: string;
+};
+
+/**
+ * Payload for session:mode-changed.
+ * `from` and `to` are SessionMode string literals ('vibecoding' | 'justvibes' | 'sandbox' | 'plan').
+ */
+export type SessionModeChangedPayload = {
+  sessionId: string;
+  from: string;
+  to: string;
+};
+
 // ---------------------------------------------------------------------------
 // Agent event payloads
 // ---------------------------------------------------------------------------
@@ -222,6 +244,12 @@ export type AgentCompletedEvent = Event<AgentCompletedPayload> & { type: 'agent:
 
 /** A fully-typed wrfc:completed event */
 export type WRFCCompletedEvent = Event<WRFCCompletedPayload> & { type: 'wrfc:completed' };
+
+/** A fully-typed session:state-changed event */
+export type SessionStateChangedEvent = Event<SessionStateChangedPayload> & { type: 'session:state-changed' };
+
+/** A fully-typed session:mode-changed event */
+export type SessionModeChangedEvent = Event<SessionModeChangedPayload> & { type: 'session:mode-changed' };
 
 // ---------------------------------------------------------------------------
 // ACP wire-protocol update discriminators

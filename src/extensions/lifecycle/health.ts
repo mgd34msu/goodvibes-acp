@@ -36,8 +36,6 @@ export class HealthCheck {
   private _status: HealthStatus['status'] = 'starting';
   private readonly _startedAt: number;
   private readonly _checks: Record<string, { ok: boolean; message?: string }> = {};
-  // EventBus is injected for future event-driven extensions (e.g. emitting
-  // health change events). Stored but not actively used in this iteration.
   private readonly _eventBus: EventBus;
 
   constructor(eventBus: EventBus) {
@@ -63,6 +61,7 @@ export class HealthCheck {
   markReady(): void {
     if (this._status === 'starting') {
       this._status = 'ready';
+      this._eventBus.emit('lifecycle:health-ready', { uptime: Date.now() - this._startedAt });
     }
   }
 
@@ -71,6 +70,7 @@ export class HealthCheck {
    */
   markShuttingDown(): void {
     this._status = 'shutting_down';
+    this._eventBus.emit('lifecycle:health-shutting-down', {});
   }
 
   /**
