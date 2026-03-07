@@ -10,6 +10,7 @@
  */
 
 import { Readable, Writable } from 'node:stream';
+import type { Socket } from 'node:net';
 import * as acp from '@agentclientprotocol/sdk';
 import { EventBus } from './core/event-bus.js';
 import { StateStore } from './core/state-store.js';
@@ -50,6 +51,8 @@ import { EventRecorder } from './extensions/acp/event-recorder.js';
 import { GoodVibesExtensions } from './extensions/acp/extensions.js';
 import { ToolCallEmitter } from './extensions/acp/tool-call-emitter.js';
 import { AgentEventBridge } from './extensions/acp/agent-event-bridge.js';
+import { createTcpTransportFromSocket } from './extensions/acp/transport.js';
+import type { AcpStream } from './extensions/acp/transport.js';
 
 // ---------------------------------------------------------------------------
 // Startup banner
@@ -146,6 +149,40 @@ const daemonManager = new DaemonManager(eventBus);
 // ---------------------------------------------------------------------------
 
 let toolCallEmitter: InstanceType<typeof ToolCallEmitter> | null = null;
+
+// ---------------------------------------------------------------------------
+// createConnection — shared helper for subprocess and daemon modes
+//
+// Creates a GoodVibesAgent + all wiring (ToolCallEmitter, SessionAdapter,
+// AgentEventBridge, EventRecorder, GoodVibesExtensions) for one ACP stream.
+// ---------------------------------------------------------------------------
+
+function createConnection(stream: AcpStream) {
+  const conn = new acp.AgentSideConnection(
+    (c) => new GoodVibesAgent(c, registry, eventBus, sessionManager, wrfcAdapter, mcpBridge),
+    stream,
+  );
+
+  // Wire toolCallEmitter to this connection (last-writer-wins in daemon mode,
+  // but each connection can have its own — set module-level for WRFC callbacks)
+  toolCallEmitter = new ToolCallEmitter(conn);
+
+  const sessionAdapter = new SessionAdapter(conn, sessionManager, eventBus);
+  sessionAdapter.register();
+
+  const agentEventBridge = new AgentEventBridge(conn, eventBus, agentTracker);
+  agentEventBridge.register();
+
+  const eventRecorder = new EventRecorder(eventBus);
+  eventRecorder.register();
+
+  const goodvibesExtensions = new GoodVibesExtensions(
+    eventBus, stateStore, registry, healthCheck, agentTracker, eventRecorder,
+  );
+  void goodvibesExtensions;
+
+  return conn;
+}
 
 // ---------------------------------------------------------------------------
 // WRFC adapter — bridges IWRFCRunner (agent.ts) to WRFCOrchestrator.run()
@@ -269,58 +306,14 @@ const mode = process.argv.includes('--daemon') || process.env.GOODVIBES_MODE ===
 
 console.error(`[goodvibes-acp] Mode: ${mode}`);
 
-if (mode === 'daemon') {
-  // TODO: wire full daemon mode (IPC socket server, persistent process lifecycle)
-  console.error('[goodvibes-acp] Daemon mode detected — falling through to subprocess transport for now.');
-}
-
 await memoryManager.load();
 await logsManager.ensureFiles();
-healthCheck.markReady();
-console.error('[goodvibes-acp] Health check: ready');
 
 eventBus.emit('runtime:started', {
   mode,
   plugins: ['review', 'agents', 'skills', 'precision', 'analytics', 'project', 'frontend'],
   timestamp: Date.now(),
 });
-
-// ---------------------------------------------------------------------------
-// ACP transport (ndjson over stdin/stdout)
-// ---------------------------------------------------------------------------
-
-const stream = acp.ndJsonStream(
-  Writable.toWeb(process.stdout) as unknown as WritableStream<Uint8Array>,
-  Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>,
-);
-
-// ---------------------------------------------------------------------------
-// ACP connection — one GoodVibesAgent per connection
-// ---------------------------------------------------------------------------
-
-const conn = new acp.AgentSideConnection(
-  (c) => new GoodVibesAgent(c, registry, eventBus, sessionManager, wrfcAdapter, mcpBridge),
-  stream,
-);
-
-// Assign emitter now that conn is available
-toolCallEmitter = new ToolCallEmitter(conn);
-
-const sessionAdapter = new SessionAdapter(conn, sessionManager, eventBus);
-sessionAdapter.register();
-
-// Bridge agent lifecycle events to ACP session updates
-const agentEventBridge = new AgentEventBridge(conn, eventBus, agentTracker);
-agentEventBridge.register();
-
-// L2 ACP extension methods (_goodvibes/*)
-const eventRecorder = new EventRecorder(eventBus);
-eventRecorder.register();
-const goodvibesExtensions = new GoodVibesExtensions(
-  eventBus, stateStore, registry, healthCheck, agentTracker, eventRecorder,
-);
-
-console.error('[goodvibes-acp] Ready — listening for ACP messages on stdin.');
 
 // ---------------------------------------------------------------------------
 // Graceful shutdown
@@ -347,12 +340,87 @@ process.on('unhandledRejection', (reason) => {
 });
 
 // ---------------------------------------------------------------------------
-// Wait for the ACP connection to close
+// Mode-specific startup
 // ---------------------------------------------------------------------------
 
-await conn.closed;
+if (mode === 'daemon') {
+  // -------------------------------------------------------------------------
+  // Daemon mode — parse options from env / CLI args
+  // -------------------------------------------------------------------------
 
-console.error('[goodvibes-acp] Connection closed.');
+  function getArgValue(flag: string): string | undefined {
+    const idx = process.argv.indexOf(flag);
+    return idx !== -1 ? process.argv[idx + 1] : undefined;
+  }
+
+  const daemonPort = parseInt(
+    process.env.GOODVIBES_DAEMON_PORT ?? getArgValue('--port') ?? '9000',
+    10,
+  );
+  const daemonHost =
+    process.env.GOODVIBES_DAEMON_HOST ?? getArgValue('--host') ?? '127.0.0.1';
+  const daemonHealthPort = parseInt(
+    process.env.GOODVIBES_DAEMON_HEALTH_PORT ?? getArgValue('--health-port') ?? String(daemonPort + 1),
+    10,
+  );
+  const daemonPidFile =
+    process.env.GOODVIBES_DAEMON_PID_FILE ?? getArgValue('--pid-file');
+
+  await daemonManager.start({
+    port: daemonPort,
+    host: daemonHost,
+    healthPort: daemonHealthPort,
+    pidFile: daemonPidFile,
+    onConnection: (socket: Socket) => {
+      const remoteId = `${socket.remoteAddress}:${socket.remotePort}`;
+      console.error(`[goodvibes-acp] Daemon: new TCP connection from ${remoteId}`);
+
+      socket.on('error', (err) => {
+        console.error(`[goodvibes-acp] Daemon: socket error from ${remoteId}:`, err.message);
+        socket.destroy();
+      });
+
+      const stream = createTcpTransportFromSocket(socket);
+      const conn = createConnection(stream);
+
+      // Log when this client disconnects
+      conn.closed.then(() => {
+        console.error(`[goodvibes-acp] Daemon: connection closed from ${remoteId}`);
+      }).catch(() => {});
+    },
+  });
+
+  healthCheck.markReady();
+  daemonManager.markReady();
+  console.error(
+    `[goodvibes-acp] Daemon ready — listening on ${daemonHost}:${daemonPort}` +
+    ` (health: ${daemonHost}:${daemonHealthPort})`,
+  );
+
+  // Daemon runs until a shutdown signal — keep the process alive.
+  await new Promise<void>((resolve) => {
+    eventBus.once('daemon:stopped', () => resolve());
+  });
+
+} else {
+  // -------------------------------------------------------------------------
+  // Subprocess mode — stdio transport (original behaviour)
+  // -------------------------------------------------------------------------
+
+  const stream = acp.ndJsonStream(
+    Writable.toWeb(process.stdout) as unknown as WritableStream<Uint8Array>,
+    Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>,
+  );
+
+  const conn = createConnection(stream);
+
+  healthCheck.markReady();
+  console.error('[goodvibes-acp] Health check: ready');
+  console.error('[goodvibes-acp] Ready — listening for ACP messages on stdin.');
+
+  await conn.closed;
+  console.error('[goodvibes-acp] Connection closed.');
+}
 
 // Suppress unused variable warnings for wired-but-unreferenced instances
 void agentCoordinator;
@@ -365,5 +433,3 @@ void ipcRouter;
 void serviceRegistry;
 void mcpBridge;
 void daemonManager;
-void goodvibesExtensions;
-void agentEventBridge;

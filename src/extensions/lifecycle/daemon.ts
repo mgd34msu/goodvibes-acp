@@ -30,6 +30,11 @@ export interface DaemonOptions {
   healthPort?: number;
   /** Path to the PID file (optional) */
   pidFile?: string;
+  /**
+   * Called for each incoming TCP connection with the raw socket.
+   * Use this in main.ts to wire the ACP transport for daemon mode.
+   */
+  onConnection?: (socket: Socket) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -211,9 +216,13 @@ export class DaemonManager {
           remoteAddress: socket.remoteAddress,
           remotePort: socket.remotePort,
         });
-        // Real ACP transport wiring is done in main.ts via the socket object.
-        // Stub: keep socket open until closed by the client.
-        socket.on('error', () => socket.destroy());
+        // Deliver the raw socket to the caller (main.ts) for ACP transport wiring.
+        if (this._options?.onConnection) {
+          this._options.onConnection(socket);
+        } else {
+          // Fallback: keep socket open until closed by the client.
+          socket.on('error', () => socket.destroy());
+        }
       });
 
       server.once('error', (err) => {

@@ -11,6 +11,7 @@
  */
 
 import { Readable, Writable } from 'node:stream';
+import type { Socket } from 'node:net';
 import * as acp from '@agentclientprotocol/sdk';
 import type { TransportType } from '../../types/transport.js';
 
@@ -102,6 +103,38 @@ export function createStdioTransport(): AcpStream {
   return _createStdioTransport();
 }
 
+// ---------------------------------------------------------------------------
+// createTcpTransportFromSocket
+// ---------------------------------------------------------------------------
+
+/**
+ * Create an ACP TCP transport from an already-connected `net.Socket`.
+ *
+ * Used by the DaemonManager: when a client connects, the socket emitted on
+ * the `daemon:connection` event is passed directly here, wrapping it into an
+ * ACP-compatible ndJson bidirectional stream.
+ *
+ * The double-cast pattern (`as unknown as WritableStream<Uint8Array>`) is
+ * required for Node→Web stream type interop.
+ *
+ * @param socket - A connected TCP socket (from `net.createServer` callback)
+ * @returns An ACP ndJson stream suitable for use with AgentSideConnection
+ *
+ * @example
+ * ```typescript
+ * daemonManager.on('daemon:connection', ({ socket }) => {
+ *   const stream = createTcpTransportFromSocket(socket);
+ *   const conn = new acp.AgentSideConnection(agentFactory, stream);
+ * });
+ * ```
+ */
+export function createTcpTransportFromSocket(socket: Socket): AcpStream {
+  return acp.ndJsonStream(
+    Writable.toWeb(socket) as unknown as WritableStream<Uint8Array>,
+    Readable.toWeb(socket) as unknown as ReadableStream<Uint8Array>,
+  );
+}
+
 function _createStdioTransport(): AcpStream {
   return acp.ndJsonStream(
     Writable.toWeb(process.stdout) as unknown as WritableStream<Uint8Array>,
@@ -120,11 +153,13 @@ function _createStdioTransport(): AcpStream {
  * @internal
  */
 function _createTcpTransport(_options: TcpTransportOptions): AcpStream {
-  // TODO: Implement TCP transport for daemon mode.
-  // This will require a TCP server (e.g. `net.createServer`) that wraps
-  // each connection's socket streams into the ndJsonStream format.
+  // TCP daemon mode uses a different pattern: the DaemonManager creates the
+  // server and emits connected sockets via `daemon:connection` events.
+  // Use `createTcpTransportFromSocket(socket)` to wrap each connected socket.
   throw new Error(
-    'TCP transport is not yet implemented. Use stdio transport for the current release.',
+    'createTransport({ type: \'tcp\' }) is not supported. ' +
+    'For daemon mode, use createTcpTransportFromSocket(socket) with the DaemonManager pattern: ' +
+    'listen for daemon:connection events and call createTcpTransportFromSocket on each socket.',
   );
 }
 
@@ -139,11 +174,13 @@ function _createTcpTransport(_options: TcpTransportOptions): AcpStream {
  * @internal
  */
 function _createWebSocketTransport(_options: WebSocketTransportOptions): AcpStream {
-  // TODO: Implement WebSocket transport for browser and remote clients.
-  // This will require a WebSocket server (e.g. `ws` or Bun's native WS)
-  // that wraps each connection's streams into the ndJsonStream format.
+  // Planned for future support of browser-based and remote clients.
+  // Will require a WebSocket server (e.g. `ws` or Bun native WS) that wraps
+  // each connection's duplex streams into the ndJsonStream format.
   throw new Error(
-    'WebSocket transport is not yet implemented. Use stdio transport for the current release.',
+    'WebSocket transport is not yet implemented. ' +
+    'It is planned for future browser and remote client support. ' +
+    'Use stdio transport for the current release.',
   );
 }
 
