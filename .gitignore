@@ -7,4 +7,5 @@ dist/
 .goodvibes/.backups/
 .goodvibes/.exec-output/
 .goodvibes/runtime-state.json
+.goodvibes/state/
 *.log
