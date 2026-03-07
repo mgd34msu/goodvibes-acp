@@ -204,7 +204,7 @@ export class GoodVibesAgent implements Agent {
       authMethods: [],
       agentCapabilities: {
         loadSession: true,
-        mcp: { http: false, sse: false },
+        mcpCapabilities: { http: false, sse: false },
         promptCapabilities: {
           embeddedContext: true,
           image: false,

@@ -4,6 +4,11 @@
  *
  * LogsManager — structured log writer for activity, decision, and error logs.
  * Writes human-readable Markdown entries to files in a configurable basePath directory.
+ *
+ * Uses direct fs (readFile/writeFile/appendFile) for .goodvibes/ runtime log files.
+ * This is intentional — log files are runtime-generated artifacts, not editor-managed
+ * source files. ITextFileAccess editor buffer awareness is not applicable here
+ * (per ACP KB dual-path guidance).
  */
 
 import { appendFile, readFile, writeFile, mkdir } from 'node:fs/promises';

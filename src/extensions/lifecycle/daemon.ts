@@ -15,6 +15,7 @@ import { createServer as createTcpServer } from 'node:net';
 import type { Server as TcpServer, Socket } from 'node:net';
 import { writeFile, unlink } from 'node:fs/promises';
 import { EventBus } from '../../core/event-bus.js';
+import { RUNTIME_VERSION } from '../../types/constants.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -63,7 +64,12 @@ async function handleHealthRequest(
   }
 
   if (url === '/health') {
-    sendJson(res, 200, { status: 'ok', pid: process.pid, timestamp: Date.now() });
+    sendJson(res, 200, {
+      status: 'ok',
+      pid: process.pid,
+      timestamp: Date.now(),
+      agent: { name: 'goodvibes', version: RUNTIME_VERSION, protocolVersion: 1 },
+    });
     return;
   }
 

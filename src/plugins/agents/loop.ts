@@ -43,6 +43,10 @@ export interface AgentLoopConfig {
   signal?: AbortSignal;
   /** Callback for progress events */
   onProgress?: (event: AgentProgressEvent) => void;
+  /** Working directory for context enrichment */
+  cwd?: string;
+  /** Workspace root paths for context enrichment */
+  workspaceRoots?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -84,6 +88,18 @@ export class AgentLoop {
     let turns = 0;
     let lastTextOutput = '';
 
+    const contextLines: string[] = [];
+    if (this.config.cwd) contextLines.push(`Working directory: ${this.config.cwd}`);
+    if (this.config.workspaceRoots?.length) {
+      contextLines.push(`Workspace roots: ${this.config.workspaceRoots.join(', ')}`);
+    }
+    if (toolDefs.length > 0) {
+      contextLines.push(`Available tools: ${toolDefs.map(t => t.name).join(', ')}`);
+    }
+    const enrichedPrompt = contextLines.length > 0
+      ? `${contextLines.join('\n')}\n\n${this.config.systemPrompt}`
+      : this.config.systemPrompt;
+
     while (turns < this.config.maxTurns) {
       // Check cancellation before each turn
       if (this.config.signal?.aborted) {
@@ -97,7 +113,7 @@ export class AgentLoop {
       try {
         const params: ChatParams = {
           model: this.config.model,
-          systemPrompt: this.config.systemPrompt,
+          systemPrompt: enrichedPrompt,
           messages,
           tools: toolDefs.length > 0 ? toolDefs : undefined,
           signal: this.config.signal,
@@ -170,7 +186,10 @@ export class AgentLoop {
     );
   }
 
-  /** Execute all tool_use blocks in parallel order, return tool_result blocks */
+  /**
+   * Execute all tool_use blocks sequentially, return tool_result blocks.
+   * Sequential execution is intentional — prevents race conditions on file-modifying tools.
+   */
   private async _executeToolCalls(
     content: ContentBlock[],
     turn: number,

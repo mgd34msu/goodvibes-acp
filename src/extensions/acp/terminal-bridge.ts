@@ -97,9 +97,19 @@ export class AcpTerminal implements ITerminal {
       const stderrChunks: string[] = [];
       let exitCode: number | null = null;
 
+      /**
+       * Use shell: true for the spawn fallback because `command` is a bare string
+       * (TerminalCreateOptions has no separate args array). Shell interpretation is
+       * required to support pipes, redirects, and other shell features.
+       * Tradeoff: slightly lower security due to shell injection risk if `command`
+       * is user-controlled. Callers must sanitize untrusted command input.
+       * shell: false would be preferred if args were supplied separately, as it
+       * avoids shell interpretation entirely and reduces injection surface.
+       */
+      const useShell = true; // bare command strings may need shell interpretation
       const proc = spawn(command, [], {
         cwd: cwd ?? this.cwd,
-        shell: true,
+        shell: useShell,
         stdio: 'pipe',
         env: env ? { ...process.env, ...env } : process.env,
       });

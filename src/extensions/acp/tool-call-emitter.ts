@@ -65,17 +65,20 @@ export class ToolCallEmitter {
    * @param toolCallId  - ID of the tool call to update
    * @param status      - New status
    * @param meta        - Optional _meta payload for structured data
+   * @param content     - Optional content array (e.g. tool output blocks)
    */
   async emitToolCallUpdate(
     sessionId: string,
     toolCallId: string,
     status: acp.ToolCallStatus,
     meta?: Record<string, unknown>,
+    content?: acp.ToolCallContent[],
   ): Promise<void> {
     const update: acp.ToolCallUpdate = {
       toolCallId,
       status,
       ...(meta ? { _meta: meta } : {}),
+      ...(content ? { content } : {}),
     };
 
     await this.conn.sessionUpdate({
