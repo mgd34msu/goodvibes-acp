@@ -431,98 +431,122 @@ class PrecisionToolProvider implements IToolProvider {
   private readonly _discover = new PrecisionDiscover();
   private readonly _notebook = new PrecisionNotebook();
 
-  async execute<T = unknown>(toolName: string, params: unknown): Promise<ToolResult<T>> {
+  async execute<T = unknown>(
+    toolName: string,
+    params: unknown,
+    onStatus?: (status: 'pending' | 'in_progress' | 'completed' | 'failed') => void,
+  ): Promise<ToolResult<T>> {
     const startMs = Date.now();
+    onStatus?.('pending');
 
     try {
+      onStatus?.('in_progress');
+      let toolResult: ToolResult<T>;
+
       switch (toolName) {
         case 'precision_read': {
           const result = await this._read.execute(
             params as Parameters<PrecisionReadTool['execute']>[0]
           );
-          return { success: result.success, data: result.data as T, error: result.error, durationMs: result.durationMs };
+          toolResult = { success: result.success, data: result.data as T, error: result.error, durationMs: result.durationMs };
+          break;
         }
 
         case 'precision_write': {
           const result = await this._write.execute(
             params as Parameters<PrecisionWriteTool['execute']>[0]
           );
-          return { success: result.success, data: result.data as T, error: result.error, durationMs: result.durationMs };
+          toolResult = { success: result.success, data: result.data as T, error: result.error, durationMs: result.durationMs };
+          break;
         }
 
         case 'precision_edit': {
           const result = await this._edit.execute(
             params as Parameters<PrecisionEditTool['execute']>[0]
           );
-          return { success: result.success, data: result.data as T, error: result.error, durationMs: result.durationMs };
+          toolResult = { success: result.success, data: result.data as T, error: result.error, durationMs: result.durationMs };
+          break;
         }
 
         case 'precision_grep': {
           const result = await this._grep.search(params as Parameters<PrecisionGrep['search']>[0]);
-          return {
+          toolResult = {
             success: true,
             data: result as T,
             durationMs: result.duration_ms,
           };
+          break;
         }
 
         case 'precision_glob': {
           const result = await this._glob.match(params as Parameters<PrecisionGlob['match']>[0]);
-          return {
+          toolResult = {
             success: true,
             data: result as T,
             durationMs: result.duration_ms,
           };
+          break;
         }
 
         case 'precision_exec': {
           const result = await this._exec.run(params as Parameters<PrecisionExec['run']>[0]);
-          return {
+          toolResult = {
             success: result.all_passed,
             data: result as T,
             error: result.all_passed ? undefined : 'precision_exec: one or more commands failed',
             durationMs: result.duration_ms,
           };
+          break;
         }
 
         case 'precision_fetch': {
           const result = await this._fetch.fetch(params as Parameters<PrecisionFetch['fetch']>[0]);
-          return { success: result.success, data: result.data as T, error: result.error, durationMs: result.durationMs };
+          toolResult = { success: result.success, data: result.data as T, error: result.error, durationMs: result.durationMs };
+          break;
         }
 
         case 'precision_symbols': {
           const result = await this._symbols.search(
             params as Parameters<PrecisionSymbols['search']>[0]
           );
-          return { success: result.success, data: result.data as T, error: result.error, durationMs: result.durationMs };
+          toolResult = { success: result.success, data: result.data as T, error: result.error, durationMs: result.durationMs };
+          break;
         }
 
         case 'precision_discover': {
           const result = await this._discover.run(
             params as Parameters<PrecisionDiscover['run']>[0]
           );
-          return {
+          toolResult = {
             success: true,
             data: result as T,
             durationMs: result.duration_ms,
           };
+          break;
         }
 
         case 'precision_notebook': {
           const result = await this._notebook.execute(
             params as Parameters<PrecisionNotebook['execute']>[0]
           );
-          return { success: result.success, data: result.data as T, error: result.error, durationMs: result.durationMs };
+          toolResult = { success: result.success, data: result.data as T, error: result.error, durationMs: result.durationMs };
+          break;
         }
 
-        default:
+        default: {
+          onStatus?.('failed');
           return {
             success: false,
             error: `precision: unknown tool '${toolName}'. Available: ${TOOL_DEFINITIONS.map((t) => t.name).join(', ')}`,
             durationMs: Date.now() - startMs,
           };
+        }
       }
+
+      onStatus?.('completed');
+      return toolResult;
     } catch (err) {
+      onStatus?.('failed');
       const message = err instanceof Error ? err.message : String(err);
       return {
         success: false,

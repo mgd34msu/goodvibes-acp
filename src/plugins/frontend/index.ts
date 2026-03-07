@@ -41,8 +41,7 @@ export const FrontendPlugin: PluginRegistration = {
     capabilities: ['frontend-analysis'],
   },
   register: (registry: unknown) => {
-    const reg = registry as Registry;
-    reg.register('frontend-analyzer', new FrontendAnalyzer());
+    (registry as Registry).register('frontend-analyzer', new FrontendAnalyzer());
   },
   shutdown: async () => {},
 };

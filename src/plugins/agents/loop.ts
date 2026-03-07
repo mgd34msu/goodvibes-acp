@@ -236,7 +236,7 @@ export class AgentLoop {
 
   /**
    * Split a namespaced tool name into [providerName, toolName].
-   * e.g. 'precision__read_file' → ['precision', 'read_file']
+   * e.g. 'precision__precision_read' → ['precision', 'precision_read']
    * If no '__' separator, returns ['', fullName].
    */
   private _splitToolName(fullName: string): [string, string] {

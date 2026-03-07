@@ -100,12 +100,13 @@ export class ShutdownManager {
   // ---------------------------------------------------------------------------
 
   private async _runWithTimeout(entry: HandlerEntry): Promise<void> {
-    const timeoutPromise = new Promise<void>((_, reject) =>
-      setTimeout(
+    let timerId: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<void>((_, reject) => {
+      timerId = setTimeout(
         () => reject(new Error(`Shutdown handler "${entry.name}" timed out after ${HANDLER_TIMEOUT_MS}ms`)),
         HANDLER_TIMEOUT_MS,
-      ),
-    );
+      );
+    });
 
     try {
       await Promise.race([entry.handler(), timeoutPromise]);
@@ -113,6 +114,30 @@ export class ShutdownManager {
       // Log warning but do not abort — proceed with remaining handlers
       const message = err instanceof Error ? err.message : String(err);
       console.warn(`[ShutdownManager] Warning during shutdown of "${entry.name}": ${message}`);
+    } finally {
+      clearTimeout(timerId);
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // ACP session cleanup
+  // ---------------------------------------------------------------------------
+
+  /**
+   * TODO (ISS-074): Register an L2 handler that closes active ACP sessions on shutdown.
+   *
+   * When an in-flight ACP prompt is interrupted by shutdown, the runtime should
+   * send a `finish` event with `stopReason: 'cancelled'` for each active session
+   * before the process exits. This requires access to the ACP session registry
+   * (e.g. via the EventBus or a direct registry reference) and should be
+   * registered at SHUTDOWN_ORDER.L2 (200) so it runs after L3 plugins but
+   * before L1 core teardown.
+   *
+   * Example registration point:
+   *   shutdownManager.register('acp-sessions', SHUTDOWN_ORDER.L2, async () => {
+   *     for (const session of acpSessionRegistry.activeSessions()) {
+   *       await session.finish({ stopReason: 'cancelled' });
+   *     }
+   *   });
+   */
 }

@@ -9,6 +9,7 @@
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 import type { SecurityIssue, SecurityReport, SecuritySummary, SecuritySeverity } from './types.js';
+import type { ITextFileAccess } from '../../types/registry.js';
 
 // ---------------------------------------------------------------------------
 // Secret detection patterns
@@ -135,6 +136,15 @@ function buildSummary(issues: SecurityIssue[]): SecuritySummary {
 // ---------------------------------------------------------------------------
 
 export class SecurityScanner {
+  // ISS-050: Optional ITextFileAccess for ACP-compliant file reads.
+  // When provided, text file reads use the ACP interface (editor buffer aware).
+  // readdir and stat remain as direct fs — no ACP equivalent exists for those.
+  private readonly _fs?: ITextFileAccess;
+
+  constructor(fs?: ITextFileAccess) {
+    this._fs = fs;
+  }
+
   /**
    * Run a full security scan on the project.
    * Never throws — returns empty issues array on unexpected errors.
@@ -173,7 +183,9 @@ export class SecurityScanner {
     // Check if .gitignore exists and what it covers
     let gitignoreContent = '';
     try {
-      gitignoreContent = await readFile(join(projectRoot, '.gitignore'), 'utf-8');
+      gitignoreContent = this._fs
+        ? await this._fs.readTextFile(join(projectRoot, '.gitignore'))
+        : await readFile(join(projectRoot, '.gitignore'), 'utf-8');
     } catch {
       // No .gitignore — all files potentially exposed
     }
@@ -276,7 +288,9 @@ export class SecurityScanner {
       filteredFiles.map(async (filePath) => {
         let content: string;
         try {
-          content = await readFile(filePath, 'utf-8');
+          content = this._fs
+            ? await this._fs.readTextFile(filePath)
+            : await readFile(filePath, 'utf-8');
         } catch {
           return;
         }

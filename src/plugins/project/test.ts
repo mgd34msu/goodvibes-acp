@@ -8,6 +8,7 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { join, extname, relative, basename } from 'node:path';
 import type { TestFile, TestCoverage, TestFramework } from './types.js';
+import type { ITextFileAccess } from '../../types/registry.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -81,6 +82,15 @@ function extractSuites(content: string): string[] {
 // ---------------------------------------------------------------------------
 
 export class TestAnalyzer {
+  // ISS-121: Optional ITextFileAccess for ACP-compliant file reads.
+  // When provided, text file reads use the ACP interface (editor buffer aware).
+  // readdir remains as direct fs — no ACP equivalent exists for directory listing.
+  private readonly _fs?: ITextFileAccess;
+
+  constructor(fs?: ITextFileAccess) {
+    this._fs = fs;
+  }
+
   /**
    * Discover all test files under the project root.
    * Never throws — returns empty array on errors.
@@ -96,7 +106,9 @@ export class TestAnalyzer {
         let suites: string[] | undefined;
 
         try {
-          const content = await readFile(filePath, 'utf-8');
+          const content = this._fs
+            ? await this._fs.readTextFile(filePath)
+            : await readFile(filePath, 'utf-8');
           testCount = estimateTestCount(content);
           const extractedSuites = extractSuites(content);
           if (extractedSuites.length > 0) {
@@ -124,7 +136,9 @@ export class TestAnalyzer {
    */
   async detectFramework(filePath: string): Promise<TestFramework> {
     try {
-      const content = await readFile(filePath, 'utf-8');
+      const content = this._fs
+        ? await this._fs.readTextFile(filePath)
+        : await readFile(filePath, 'utf-8');
 
       if (/from\s+['"]\.?\/?playwright/.test(content) || /@playwright\/test/.test(content)) {
         return 'playwright';

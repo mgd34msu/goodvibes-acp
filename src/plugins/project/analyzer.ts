@@ -10,7 +10,7 @@
 
 import { join } from 'node:path';
 import { stat } from 'node:fs/promises';
-import type { IToolProvider, ToolDefinition, ToolResult } from '../../types/registry.js';
+import type { IToolProvider, ToolDefinition, ToolResult, ITextFileAccess } from '../../types/registry.js';
 import { DependencyAnalyzer } from './deps.js';
 import { SecurityScanner } from './security.js';
 import { TestAnalyzer } from './test.js';
@@ -210,10 +210,18 @@ export class ProjectAnalyzer implements IToolProvider {
   readonly name = 'project-analyzer';
   readonly tools: ToolDefinition[] = TOOL_DEFINITIONS;
 
-  private readonly _deps = new DependencyAnalyzer();
-  private readonly _security = new SecurityScanner();
-  private readonly _test = new TestAnalyzer();
+  private readonly _deps: DependencyAnalyzer;
+  private readonly _security: SecurityScanner;
+  private readonly _test: TestAnalyzer;
   private readonly _db = new DatabaseTools();
+
+  // ISS-051: Optional ITextFileAccess injected to all sub-analyzers so they
+  // can use ACP-compliant file reads (editor buffer aware) when available.
+  constructor(fs?: ITextFileAccess) {
+    this._deps = new DependencyAnalyzer(fs);
+    this._security = new SecurityScanner(fs);
+    this._test = new TestAnalyzer(fs);
+  }
 
   async execute<T = unknown>(toolName: string, params: unknown): Promise<ToolResult<T>> {
     const startMs = Date.now();

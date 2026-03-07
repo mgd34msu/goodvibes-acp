@@ -28,7 +28,15 @@ const PROTOCOL_SKILLS: SkillDefinition[] = [
     tier: 'protocol',
     keywords: ['precision', 'tools', 'read', 'write', 'edit', 'grep', 'glob', 'verbosity'],
     alwaysActive: true,
-    content: 'Use precision_engine tools with appropriate verbosity and extract modes.',
+    content: `Use precision_engine tools with appropriate verbosity and extract modes to minimize token consumption.
+
+Extract modes (cheapest to most expensive): lines (80-95% savings) → symbols (70-90%) → outline (60-80%) → ast (50-70%) → content (0%). Always choose the cheapest mode that satisfies the task. Use 'outline' to understand structure before deciding if 'content' is needed.
+
+Verbosity rules: precision_write → count_only (you wrote it, don't read it back). precision_edit → minimal. precision_read → standard. precision_exec → minimal unless debugging.
+
+Batching: use the built-in arrays — precision_read files[], precision_write files[], precision_edit edits[], precision_exec commands[]. Three sequential single-item calls should always be collapsed into one batched call.
+
+NEVER use precision_exec to search files — use precision_grep, precision_glob, precision_read, or discover instead.`,
   },
   {
     name: 'gather-plan-apply',
@@ -37,7 +45,13 @@ const PROTOCOL_SKILLS: SkillDefinition[] = [
     tier: 'protocol',
     keywords: ['gpa', 'gather', 'plan', 'apply', 'workflow', 'loop'],
     alwaysActive: true,
-    content: 'Follow the GPA loop: GATHER context, PLAN changes, APPLY edits.',
+    content: `Follow the GPA loop for every task: GATHER context, PLAN changes (zero tool calls), APPLY edits.
+
+GATHER: Check .goodvibes/memory/ for prior decisions and failures. Run a single 'discover' call with all queries batched (glob, grep, symbols). Then batch-read the discovered files using precision_read with the cheapest extract mode that provides sufficient context.
+
+PLAN: No tool calls in this phase. Identify exact file paths to create, modify, or delete. List the precise find/replace pairs. Classify operations as independent (batchable) or dependent (sequential). One sentence is enough for simple tasks; structured notes for complex ones.
+
+APPLY: Execute the plan. Batch independent writes into one precision_write call. Batch independent edits into one precision_edit call. Verify with precision_exec (typecheck, lint, build). On failure, fix only the failed operations — never re-run successful ones.`,
   },
   {
     name: 'review-scoring',
@@ -46,7 +60,11 @@ const PROTOCOL_SKILLS: SkillDefinition[] = [
     tier: 'protocol',
     keywords: ['review', 'scoring', 'wrfc', 'quality', 'dimensions'],
     alwaysActive: true,
-    content: 'Score reviews across 10 dimensions with weighted scoring.',
+    content: `Score implementations across 10 dimensions, each weighted 0–1. The overall score is the weighted average (0–10 scale).
+
+Dimensions: (1) Correctness — does it do what was asked? (2) Type safety — no 'any', proper generics, exhaustive checks. (3) Error handling — all failure modes covered, errors propagated correctly. (4) Security — no injection, proper validation, no leaked secrets. (5) Performance — no N+1 queries, appropriate caching, efficient algorithms. (6) Maintainability — follows existing patterns, clear naming, single responsibility. (7) Completeness — no TODOs, no placeholder logic, no stubs. (8) Documentation — JSDoc for public APIs, inline comments for complex logic. (9) Test coverage — critical paths exercised. (10) Accessibility — UI components meet WCAG 2.1 AA.
+
+A score below the configured minReviewScore triggers a fix cycle. Always report scores per dimension and the final weighted average.`,
   },
   {
     name: 'goodvibes-memory',
@@ -55,7 +73,13 @@ const PROTOCOL_SKILLS: SkillDefinition[] = [
     tier: 'protocol',
     keywords: ['memory', 'decisions', 'patterns', 'failures', 'preferences'],
     alwaysActive: true,
-    content: 'Use .goodvibes/memory/ for cross-session knowledge persistence.',
+    content: `Read from .goodvibes/memory/ at the start of every session to avoid repeating past mistakes.
+
+Key files: decisions.json (architectural choices — respect these), patterns.json (proven approaches — reuse these), failures.json (past tool failures and wrong assumptions — avoid these).
+
+Write to memory when: making an architectural decision that affects future sessions, discovering a non-obvious pattern in the codebase, encountering a genuine tool failure (not user error), or when the user expresses a preference.
+
+Format for decisions.json: { what, why, category, confidence }. Format for failures.json: { tool, error, context, workaround }. Format for patterns.json: { pattern, files, notes }.`,
   },
   {
     name: 'error-recovery',
@@ -64,7 +88,15 @@ const PROTOCOL_SKILLS: SkillDefinition[] = [
     tier: 'protocol',
     keywords: ['error', 'recovery', 'escalation', 'fix', 'retry'],
     alwaysActive: true,
-    content: 'Follow tiered recovery: retry, escalate, ask user.',
+    content: `Follow tiered recovery when a tool or build step fails.
+
+Tier 1 — Self-fix: check if the error is a user error (wrong path, bad syntax, missing arg). Correct and retry. Check .goodvibes/memory/failures.json to see if this has happened before.
+
+Tier 2 — Workaround: if the precision tool genuinely fails (not user error), use the equivalent native tool for that specific operation only. Log the failure to memory/failures.json with context. Return to precision tools immediately after.
+
+Tier 3 — Escalate: if the workaround also fails, or if the root cause requires a decision beyond your scope (schema change, auth provider swap, breaking API change), stop and ask the user. Do not guess at irreversible operations.
+
+Never retry a successful operation. Never re-run a full batch if only one item failed — fix and re-run the one.`,
   },
 ];
 

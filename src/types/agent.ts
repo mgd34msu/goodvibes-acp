@@ -10,7 +10,7 @@
 // ---------------------------------------------------------------------------
 
 /** Lifecycle states of an agent instance */
-export type AgentStatus = 'spawned' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type AgentStatus = 'spawned' | 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 // ---------------------------------------------------------------------------
 // Agent type
@@ -45,6 +45,10 @@ export type AgentConfig = {
   context?: Record<string, unknown>;
   /** Maximum duration in milliseconds before the agent is force-cancelled */
   timeoutMs?: number;
+  /** Permission mode for the agent (e.g., 'default', 'restricted', 'elevated') */
+  mode?: string;
+  /** Permission policy identifier governing what this agent is allowed to do */
+  permissionPolicy?: string;
 };
 
 // ---------------------------------------------------------------------------

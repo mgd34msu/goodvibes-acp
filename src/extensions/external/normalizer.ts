@@ -152,3 +152,40 @@ export class NormalizerRegistry {
     return Array.from(this._normalizers.keys());
   }
 }
+
+// ---------------------------------------------------------------------------
+// ACP adapter — L1 → L2 bridge helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Converts a {@link NormalizedEvent} (L1 internal shape) into the ACP-compatible
+ * extension event envelope used by the `_goodvibes/events` JSON-RPC notification.
+ *
+ * This adapter is the boundary between the L1 generic ingestion layer and the
+ * L2 ACP session notification pipeline.  The L2 layer should subscribe to
+ * `EventBus.on('external:event', ...)` and call this function before forwarding
+ * to the ACP transport.
+ *
+ * @param event  A normalized event produced by {@link NormalizerRegistry}.
+ * @returns      An ACP-compatible JSON-RPC notification params object.
+ *
+ * @example
+ * ```typescript
+ * eventBus.on('external:event', (event: NormalizedEvent) => {
+ *   const acpEnvelope = toAcpExtensionEvent(event);
+ *   session.sendNotification('_goodvibes/events', acpEnvelope);
+ * });
+ * ```
+ */
+export function toAcpExtensionEvent(event: NormalizedEvent): Record<string, unknown> {
+  return {
+    method: '_goodvibes/events',
+    params: {
+      source: event.source,
+      type: event.type,
+      payload: event.payload,
+      timestamp: event.timestamp,
+      eventId: event.id,
+    },
+  };
+}

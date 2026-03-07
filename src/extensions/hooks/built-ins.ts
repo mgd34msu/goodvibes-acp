@@ -24,6 +24,10 @@ export function validateAgentConfig(
       return { proceed: false, reason: `Missing required field: ${field}` };
     }
   }
+  const config = context as Record<string, unknown>;
+  if (!config['mode'] && !config['permissionPolicy']) {
+    console.error('[Hooks] Warning: Agent spawned without permission context');
+  }
   return { proceed: true };
 }
 

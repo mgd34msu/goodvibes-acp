@@ -69,7 +69,7 @@ export class GoodVibesExtensions {
       case '_goodvibes/agents':
         return this._agents();
       case '_goodvibes/analytics':
-        return this._analytics();
+        return this._analytics(params);
       default:
         return { error: 'unknown_method', _meta: META };
     }
@@ -251,7 +251,7 @@ export class GoodVibesExtensions {
   // _goodvibes/analytics
   // ---------------------------------------------------------------------------
 
-  private _analytics(): unknown {
+  private _analytics(params?: unknown): unknown {
     // Try to get the analytics engine from the registry (L3 plugin).
     // If not registered, return zero values.
     const analyticsEngine = this._registry.getOptional<{
@@ -265,12 +265,14 @@ export class GoodVibesExtensions {
       };
     }>('analytics-engine');
 
+    const meta = (params as Record<string, unknown> | undefined)?._meta as Record<string, unknown> | undefined;
+
     if (analyticsEngine === undefined) {
       return {
         totalTokensUsed: 0,
         activeBudgets: [],
         topTools: [],
-        _meta: META,
+        _meta: { ...META, ...(meta ?? {}) },
       };
     }
 
@@ -303,7 +305,7 @@ export class GoodVibesExtensions {
       totalTokensUsed: dashboard.totalTokensUsed,
       activeBudgets,
       topTools,
-      _meta: META,
+      _meta: { ...META, ...(meta ?? {}) },
     };
   }
 

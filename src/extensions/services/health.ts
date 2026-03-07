@@ -53,7 +53,8 @@ const DEFAULT_RETRY_DELAY_MS = 500;
 // ---------------------------------------------------------------------------
 
 /**
- * Health checker for registered external services.
+ * Checks external HTTP service health via HEAD/GET probes.
+ * TODO: Wire into ACP extension method (e.g., _goodvibes/health) or remove.
  *
  * Probes each service's endpoint using an HTTP HEAD request (falls back to GET
  * on 405 Method Not Allowed). A 2xx/3xx response is healthy; 5xx is unhealthy;

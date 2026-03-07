@@ -41,7 +41,8 @@ export const AnalyticsPlugin: PluginRegistration = {
     capabilities: ['analytics', 'budget'],
   },
   register: (registry: unknown) => {
-    (registry as Registry).register('analytics', new AnalyticsEngine());
+    const reg = registry as Registry;
+    reg.register('analytics', new AnalyticsEngine());
   },
   shutdown: async () => {
     // The engine instance is held only in the registry; graceful flush

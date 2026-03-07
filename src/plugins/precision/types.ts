@@ -17,9 +17,10 @@
  * - content: full raw file content
  * - outline: structural overview (signatures, no bodies)
  * - symbols: exported declarations only
+ * - ast: abstract syntax tree representation (structural patterns)
  * - lines: specific line range only
  */
-export type ExtractMode = 'content' | 'outline' | 'symbols' | 'lines';
+export type ExtractMode = 'content' | 'outline' | 'symbols' | 'ast' | 'lines';
 
 /**
  * Write mode controlling behaviour when the target file already exists.

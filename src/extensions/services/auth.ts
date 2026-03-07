@@ -35,7 +35,7 @@ export interface AuthResult {
  */
 export type TokenRefreshCallback = (serviceName: string) => Promise<string>;
 
-/** Options for AuthOrchestrator construction */
+/** Options for ServiceAuthOrchestrator construction */
 export interface AuthOrchestratorOptions {
   /**
    * Optional callback for bearer token refresh.
@@ -49,7 +49,9 @@ export interface AuthOrchestratorOptions {
 // ---------------------------------------------------------------------------
 
 /**
- * Authentication orchestrator for registered services.
+ * Handles outbound authentication to external services (API keys, tokens).
+ * NOT the same as ACP inbound client authentication (which uses authMethods/authenticate).
+ * TODO: Wire into runtime via service index, or remove if not needed.
  *
  * Builds auth credentials from a ServiceConfig and emits events on
  * success or failure. Supports bearer, basic, and api-key strategies.
@@ -58,7 +60,7 @@ export interface AuthOrchestratorOptions {
  * - `auth:success` — on successful authentication
  * - `auth:failure` — on authentication failure
  */
-export class AuthOrchestrator {
+export class ServiceAuthOrchestrator {
   private readonly _registry: ServiceRegistry;
   private readonly _bus: EventBus;
   private readonly _onTokenRefresh?: TokenRefreshCallback;

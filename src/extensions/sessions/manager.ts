@@ -100,6 +100,12 @@ export class SessionManager {
   /**
    * Load an existing session by ID.
    * Throws if the session does not exist.
+   *
+   * TODO(ISS-123): History replay is missing `_goodvibes/phase: 'replay'` marker.
+   * When replaying history messages into the agent loop, each replayed message
+   * should include `_goodvibes: { phase: 'replay' }` in its metadata so the
+   * agent can distinguish replay from live input. This marker lives in agent.ts
+   * at the point where history is replayed into the agent loop.
    */
   async load(sessionId: string): Promise<{ context: SessionContext; history: HistoryMessage[] }> {
     const stored = this._store.get<StoredContext>(NS, sessionId);
@@ -231,22 +237,33 @@ export class SessionManager {
 
   /**
    * Set a named config option on a session.
+   *
+   * Returns the full updated configOptions record so callers can reflect
+   * the new state back to ACP (SetSessionConfigOption response).
    */
-  async setConfigOption(sessionId: string, key: string, value: string): Promise<void> {
+  async setConfigOption(
+    sessionId: string,
+    key: string,
+    value: string,
+  ): Promise<Record<string, string>> {
     const stored = this._requireStored(sessionId);
+
+    const updatedOptions: Record<string, string> = {
+      ...stored.config.configOptions,
+      [key]: value,
+    };
 
     const updated: StoredContext = {
       ...stored,
       config: {
         ...stored.config,
-        configOptions: {
-          ...stored.config.configOptions,
-          [key]: value,
-        },
+        configOptions: updatedOptions,
       },
       updatedAt: Date.now(),
     };
     this._store.set(NS, sessionId, updated);
+
+    return updatedOptions;
   }
 
   // -------------------------------------------------------------------------

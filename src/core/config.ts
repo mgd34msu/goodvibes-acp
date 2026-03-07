@@ -136,17 +136,31 @@ function setByPath(
 
 /**
  * Apply environment variable overrides.
- * Env vars follow the pattern GOODVIBES_RUNTIME_MODE -> runtime.mode
- * e.g., GOODVIBES_RUNTIME_PORT=3000 sets runtime.port = 3000
+ *
+ * Naming convention:
+ *   - Double underscore `__` = nesting separator (maps to a `.` in the config path)
+ *   - Single underscore `_` = camelCase word boundary within a segment
+ *
+ * Examples:
+ *   GOODVIBES_RUNTIME__MODE        → runtime.mode
+ *   GOODVIBES_AGENTS__MAX_PARALLEL → agents.maxParallel
+ *   GOODVIBES_WRFC__MIN_REVIEW_SCORE → wrfc.minReviewScore
  */
 function applyEnvOverrides(config: RuntimeConfig): RuntimeConfig {
   const result = deepClone(config);
   for (const [envKey, envValue] of Object.entries(process.env)) {
     if (!envKey.startsWith(ENV_PREFIX)) continue;
-    const configPath = envKey
-      .slice(ENV_PREFIX.length)
-      .toLowerCase()
-      .replace(/_([a-z])/g, (_, c: string) => `.${c}`);
+    // Strip prefix, split on __ to get nesting segments, then camelCase each segment
+    const withoutPrefix = envKey.slice(ENV_PREFIX.length);
+    const configPath = withoutPrefix
+      .split('__')
+      .map((segment) =>
+        segment
+          .toLowerCase()
+          // Convert _x boundaries within a segment to camelCase
+          .replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())
+      )
+      .join('.');
 
     // Type coercion: try number, then boolean, then string
     let value: unknown = envValue;

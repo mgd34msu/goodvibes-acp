@@ -9,15 +9,19 @@
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join, resolve, extname, dirname } from 'node:path';
 import type { Dependency, DepsAnalysis } from './types.js';
+import type { ITextFileAccess } from '../../types/registry.js';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
 /** Read and parse a JSON file, returning null on any error */
-async function readJson(filePath: string): Promise<Record<string, unknown> | null> {
+async function readJson(
+  filePath: string,
+  fs?: ITextFileAccess,
+): Promise<Record<string, unknown> | null> {
   try {
-    const text = await readFile(filePath, 'utf-8');
+    const text = fs ? await fs.readTextFile(filePath) : await readFile(filePath, 'utf-8');
     return JSON.parse(text) as Record<string, unknown>;
   } catch {
     return null;
@@ -57,9 +61,9 @@ async function collectSourceFiles(
 }
 
 /** Extract static import specifiers from a source file */
-async function extractImports(filePath: string): Promise<string[]> {
+async function extractImports(filePath: string, fs?: ITextFileAccess): Promise<string[]> {
   try {
-    const content = await readFile(filePath, 'utf-8');
+    const content = fs ? await fs.readTextFile(filePath) : await readFile(filePath, 'utf-8');
     const imports: string[] = [];
     // Match: import ... from 'specifier' / import('specifier') / require('specifier')
     const patterns = [
@@ -92,13 +96,22 @@ function extractPackageName(specifier: string): string {
 // ---------------------------------------------------------------------------
 
 export class DependencyAnalyzer {
+  // ISS-049: Optional ITextFileAccess for ACP-compliant file reads.
+  // When provided, text file reads use the ACP interface (editor buffer aware).
+  // readdir and stat remain as direct fs — no ACP equivalent exists for those.
+  private readonly _fs?: ITextFileAccess;
+
+  constructor(fs?: ITextFileAccess) {
+    this._fs = fs;
+  }
+
   /**
    * Reads package.json, detects circular imports, unused deps, and outdated packages.
    * Never throws — returns partial results with empty arrays on errors.
    */
   async analyze(projectRoot: string): Promise<DepsAnalysis> {
     const pkgPath = join(projectRoot, 'package.json');
-    const pkg = await readJson(pkgPath);
+    const pkg = await readJson(pkgPath, this._fs);
 
     const dependencies: Dependency[] = [];
     const devDependencies: Dependency[] = [];
@@ -153,7 +166,7 @@ export class DependencyAnalyzer {
 
     await Promise.all(
       files.map(async (file) => {
-        const imports = await extractImports(file);
+        const imports = await extractImports(file, this._fs);
         const neighbors = new Set<string>();
         for (const imp of imports) {
           // Only track relative imports (package imports can't be circular within project)
@@ -215,7 +228,7 @@ export class DependencyAnalyzer {
    */
   async findUnused(projectRoot: string): Promise<string[]> {
     const pkgPath = join(projectRoot, 'package.json');
-    const pkg = await readJson(pkgPath);
+    const pkg = await readJson(pkgPath, this._fs);
     if (!pkg) return [];
 
     const rawDeps = (pkg['dependencies'] ?? {}) as Record<string, string>;
@@ -234,7 +247,7 @@ export class DependencyAnalyzer {
     const usedPackages = new Set<string>();
     await Promise.all(
       files.map(async (file) => {
-        const imports = await extractImports(file);
+        const imports = await extractImports(file, this._fs);
         for (const imp of imports) {
           if (imp.startsWith('.')) continue;
           usedPackages.add(extractPackageName(imp));
@@ -258,7 +271,7 @@ export class DependencyAnalyzer {
    */
   async checkOutdated(projectRoot: string): Promise<Dependency[]> {
     const pkgPath = join(projectRoot, 'package.json');
-    const pkg = await readJson(pkgPath);
+    const pkg = await readJson(pkgPath, this._fs);
     if (!pkg) return [];
 
     const rawDeps = (pkg['dependencies'] ?? {}) as Record<string, string>;
@@ -278,7 +291,7 @@ export class DependencyAnalyzer {
       allDeps.map(async ({ name, version, type }) => {
         try {
           const installedPkgPath = join(projectRoot, 'node_modules', name, 'package.json');
-          const installed = await readJson(installedPkgPath);
+          const installed = await readJson(installedPkgPath, this._fs);
           if (!installed) return;
 
           const installedVersion = String(installed['version'] ?? '');

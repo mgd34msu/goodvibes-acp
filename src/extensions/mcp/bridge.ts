@@ -175,6 +175,7 @@ export class McpBridge {
 
     try {
       const client = this._createClient(server);
+      if (!client) return null;
       await client.initialize();
 
       const mcpTools = await client.listTools();
@@ -194,7 +195,7 @@ export class McpBridge {
     }
   }
 
-  private _createClient(server: McpServer): McpClient {
+  private _createClient(server: McpServer): McpClient | null {
     // Only stdio is supported in the baseline implementation.
     // HTTP/SSE transports require additional dependencies not yet available.
     if ('command' in server) {

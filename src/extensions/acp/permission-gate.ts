@@ -12,6 +12,7 @@
  * ACP SDK's RequestPermissionRequest/RequestPermissionResponse wire format.
  */
 
+import { randomUUID } from 'crypto';
 import type * as acp from '@agentclientprotocol/sdk';
 import type { PermissionRequest, PermissionResult, PermissionPolicy, PermissionType } from '../../types/permissions.js';
 
@@ -140,7 +141,7 @@ export class PermissionGate {
 
     // 4. Prompt the ACP client using the SDK's structured permission request
     try {
-      const toolCallId = request.toolName ?? `permission-${type}`;
+      const toolCallId = request.toolCallId ?? randomUUID();
       const response = await this.conn.requestPermission({
         sessionId: this.sessionId,
         options: buildPermissionOptions(),

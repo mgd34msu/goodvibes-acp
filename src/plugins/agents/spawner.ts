@@ -48,7 +48,12 @@ type AgentState = {
   status: AgentStatus;
   output: string;
   errors: AgentError[];
-  filesModified: string[];
+  /**
+   * Files modified by the agent loop.
+   * TODO: Populate from AgentLoopResult once the loop tracks file modifications.
+   * Currently undefined because AgentLoopResult does not expose this information.
+   */
+  filesModified: string[] | undefined;
   startedAt?: number;
   finishedAt?: number;
   /** AbortController for real AgentLoop cancellation */
@@ -105,22 +110,22 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
     const state: AgentState = {
       handle,
       config,
-      status: 'spawned',
+      status: 'pending',
       output: '',
       errors: [],
-      filesModified: [],
+      filesModified: undefined,
       resolvers: [],
       rejecters: [],
     };
 
     this._agents.set(id, state);
 
-    // Transition to 'running' synchronously (mirrors real process start)
-    state.status = 'running';
-    state.startedAt = Date.now();
-
     // Check whether a real LLM provider is available
     const hasLLMProvider = this._registry?.has('llm-provider') ?? false;
+
+    // Transition to 'running' now that we are about to start the agent loop
+    state.status = 'running';
+    state.startedAt = Date.now();
 
     if (hasLLMProvider) {
       // --- Real AgentLoop path ---
@@ -371,7 +376,9 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
       handle: state.handle,
       status: state.status as AgentResult['status'],
       output: state.output,
-      filesModified: state.filesModified,
+      // filesModified is undefined when the loop did not report file modifications.
+      // TODO: Populate once AgentLoopResult exposes this information.
+      filesModified: state.filesModified ?? [],
       errors: state.errors,
       durationMs: finishedAt - spawnedAt,
     };

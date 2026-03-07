@@ -34,6 +34,8 @@ export type PermissionRequest = {
   sessionId?: string;
   /** Optional: tool name when type is 'mcp' */
   toolName?: string;
+  /** The UUID from the preceding tool_call update; used as toolCallId in ACP permission requests */
+  toolCallId?: string;
   /** Short label for UI display */
   title: string;
   /** Full description of what will happen */

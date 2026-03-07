@@ -29,6 +29,8 @@ export class AnalyticsEngine {
   private readonly _dashboard: AnalyticsDashboard;
   private readonly _exporter: AnalyticsExporter;
   private readonly _sync: SessionSync;
+  /** Pending threshold-crossing warnings, keyed by sessionId */
+  private readonly _pendingWarnings = new Map<string, string[]>();
 
   constructor(config?: ConfigParams) {
     this._store = {
@@ -95,8 +97,43 @@ export class AnalyticsEngine {
       };
     }
 
-    // Update budget
+    // Update budget and check threshold crossings
+    const budgetBefore = this._store.budgets.get(sessionId);
+    const utilizationBefore =
+      budgetBefore && budgetBefore.totalBudget > 0
+        ? budgetBefore.used / budgetBefore.totalBudget
+        : 0;
+
     this._budget.track(entry, sessionId);
+
+    const budgetAfter = this._store.budgets.get(sessionId);
+    if (budgetAfter && budgetAfter.totalBudget > 0) {
+      const utilizationAfter = budgetAfter.used / budgetAfter.totalBudget;
+      // Check if we just crossed the warning threshold
+      if (
+        utilizationBefore < budgetAfter.warningThreshold &&
+        utilizationAfter >= budgetAfter.warningThreshold
+      ) {
+        this._pendingWarnings.set(sessionId, [
+          ...this.getWarnings(sessionId),
+        ]);
+      }
+      // Check if we just crossed the alert threshold
+      if (
+        utilizationBefore < budgetAfter.alertThreshold &&
+        utilizationAfter >= budgetAfter.alertThreshold
+      ) {
+        this._pendingWarnings.set(sessionId, [
+          ...this.getWarnings(sessionId),
+        ]);
+      }
+      // Check if we just crossed 100%
+      if (utilizationBefore < 1.0 && utilizationAfter >= 1.0) {
+        this._pendingWarnings.set(sessionId, [
+          ...this.getWarnings(sessionId),
+        ]);
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -194,6 +231,82 @@ export class AnalyticsEngine {
   /** Get all tags for a session */
   getTags(sessionId: string): Record<string, string> {
     return this._store.tags.get(sessionId) ?? {};
+  }
+
+  // ---------------------------------------------------------------------------
+  // ACP Response format
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Build a GoodVibesAnalyticsResponse-shaped summary for a session (or all sessions).
+   *
+   * @param sessionId - Optional session to scope the response. If omitted, aggregates
+   *   across all sessions in the store.
+   * @returns Token usage totals, turn count, agent count, and wall-clock duration.
+   */
+  getAnalyticsResponse(
+    sessionId?: string
+  ): {
+    tokenUsage: {
+      input: number;
+      output: number;
+      total: number;
+      budget?: number;
+      remaining?: number;
+    };
+    turnCount: number;
+    agentCount: number;
+    duration_ms: number;
+  } {
+    if (sessionId) {
+      const session = this._store.sessions.get(sessionId);
+      const budget = this._store.budgets.get(sessionId);
+      const input = session?.totalTokensIn ?? 0;
+      const output = session?.totalTokensOut ?? 0;
+      const firstEntry = session?.entries[0]?.timestamp;
+      const lastEntry = session?.entries[session.entries.length - 1]?.timestamp;
+      const duration_ms =
+        firstEntry !== undefined && lastEntry !== undefined
+          ? lastEntry - firstEntry
+          : 0;
+      return {
+        tokenUsage: {
+          input,
+          output,
+          total: input + output,
+          ...(budget ? { budget: budget.totalBudget, remaining: budget.remaining } : {}),
+        },
+        turnCount: session?.entries.length ?? 0,
+        agentCount: 1,
+        duration_ms,
+      };
+    }
+
+    // Aggregate across all sessions
+    let input = 0;
+    let output = 0;
+    let turnCount = 0;
+    let minTs = Infinity;
+    let maxTs = -Infinity;
+    for (const session of this._store.sessions.values()) {
+      input += session.totalTokensIn;
+      output += session.totalTokensOut;
+      turnCount += session.entries.length;
+      for (const e of session.entries) {
+        if (e.timestamp < minTs) minTs = e.timestamp;
+        if (e.timestamp > maxTs) maxTs = e.timestamp;
+      }
+    }
+    return {
+      tokenUsage: {
+        input,
+        output,
+        total: input + output,
+      },
+      turnCount,
+      agentCount: this._store.sessions.size,
+      duration_ms: minTs !== Infinity ? maxTs - minTs : 0,
+    };
   }
 
   // ---------------------------------------------------------------------------

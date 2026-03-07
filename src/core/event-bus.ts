@@ -69,13 +69,17 @@ export interface EventBusOptions {
  */
 export class EventBus {
   private readonly _handlers = new Map<string, Set<EventHandler>>();
-  private readonly _history: EventRecord[] = [];
+  private readonly _history: EventRecord[];
   private readonly _historyLimit: number;
+  /** Write index for O(1) circular ring buffer insertion */
+  private _writeIdx = 0;
   private _destroyed = false;
   private _idCounter = 0;
 
   constructor(options: EventBusOptions = {}) {
     this._historyLimit = options.historyLimit ?? 1000;
+    // Pre-allocate the ring buffer array to avoid resizing
+    this._history = new Array<EventRecord>(this._historyLimit);
   }
 
   /**
@@ -155,8 +159,10 @@ export class EventBus {
    *
    * @param type - Event type string
    * @param payload - Event payload
+   * @param sessionId - Optional explicit session ID. When provided, takes precedence
+   *   over the `sessionId` field extracted from the payload.
    */
-  emit<TPayload = unknown>(type: string, payload: TPayload): void {
+  emit<TPayload = unknown>(type: string, payload: TPayload, sessionId?: string): void {
     if (this._destroyed) return;
 
     const record: EventRecord<TPayload> = {
@@ -164,16 +170,14 @@ export class EventBus {
       type,
       payload,
       timestamp: Date.now(),
-      sessionId: (payload as Record<string, unknown>)?.sessionId as
-        | string
-        | undefined,
+      sessionId:
+        sessionId ??
+        ((payload as Record<string, unknown>)?.sessionId as string | undefined),
     };
 
-    // Add to history ring buffer
-    this._history.push(record as EventRecord);
-    if (this._history.length > this._historyLimit) {
-      this._history.shift();
-    }
+    // Add to history ring buffer — O(1) circular write
+    this._history[this._writeIdx % this._historyLimit] = record as EventRecord;
+    this._writeIdx++;
 
     // Collect matching handler sets
     const sets: Set<EventHandler>[] = [];
@@ -233,9 +237,23 @@ export class EventBus {
    * @returns Array of event records
    */
   history(eventType?: string, limit?: number): EventRecord[] {
-    let results = eventType
-      ? this._history.filter((r) => r.type === eventType)
-      : [...this._history];
+    // Reconstruct chronological order from circular buffer
+    const count = Math.min(this._writeIdx, this._historyLimit);
+    const ordered: EventRecord[] = [];
+    if (this._writeIdx <= this._historyLimit) {
+      // Buffer not yet wrapped — slice directly
+      for (let i = 0; i < count; i++) {
+        ordered.push(this._history[i]);
+      }
+    } else {
+      // Buffer wrapped — oldest slot is at writeIdx % historyLimit
+      const start = this._writeIdx % this._historyLimit;
+      for (let i = 0; i < this._historyLimit; i++) {
+        ordered.push(this._history[(start + i) % this._historyLimit]);
+      }
+    }
+
+    let results = eventType ? ordered.filter((r) => r.type === eventType) : ordered;
 
     if (limit !== undefined && limit > 0) {
       results = results.slice(-limit);
@@ -250,7 +268,8 @@ export class EventBus {
    */
   clear(): void {
     this._handlers.clear();
-    this._history.length = 0;
+    this._history.fill(undefined as unknown as EventRecord);
+    this._writeIdx = 0;
   }
 
   /**
@@ -260,7 +279,8 @@ export class EventBus {
    */
   destroy(): void {
     this._handlers.clear();
-    this._history.length = 0;
+    this._history.fill(undefined as unknown as EventRecord);
+    this._writeIdx = 0;
     this._destroyed = true;
   }
 
@@ -302,10 +322,8 @@ export class EventBus {
       timestamp: Date.now(),
     };
 
-    this._history.push(record);
-    if (this._history.length > this._historyLimit) {
-      this._history.shift();
-    }
+    this._history[this._writeIdx % this._historyLimit] = record;
+    this._writeIdx++;
 
     const errorHandlers = this._handlers.get('error');
     if (errorHandlers) {

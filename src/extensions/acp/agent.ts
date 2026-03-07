@@ -18,6 +18,11 @@ import { toAcpError, ACP_ERROR_CODES } from './errors.js';
 import type { McpBridge } from '../mcp/bridge.js';
 import { PlanEmitter } from './plan-emitter.js';
 import { CommandsEmitter } from './commands-emitter.js';
+import { GoodVibesExtensions } from './extensions.js';
+import { HealthCheck } from '../lifecycle/health.js';
+import { AgentTracker } from '../agents/tracker.js';
+import { EventRecorder } from './event-recorder.js';
+import { StateStore } from '../../core/state-store.js';
 
 // The protocol version this agent supports (ISS-029).
 const SUPPORTED_VERSION: number = typeof PROTOCOL_VERSION === 'number' ? PROTOCOL_VERSION : 1;
@@ -89,6 +94,13 @@ export class GoodVibesAgent implements Agent {
   /** Commands emitter for slash command advertisement */
   private readonly commandsEmitter: CommandsEmitter;
 
+  /**
+   * GoodVibesExtensions delegate — handles all _goodvibes/* method calls and push notifications.
+   * Wired when runtime deps (healthCheck, agentTracker, eventRecorder, stateStore) are provided.
+   * ISS-025: delegate extMethod() to this instance instead of inline switch-case.
+   */
+  private readonly _extensions: GoodVibesExtensions | undefined;
+
   constructor(
     private readonly conn: AgentSideConnection,
     private readonly registry: Registry,
@@ -96,9 +108,38 @@ export class GoodVibesAgent implements Agent {
     private readonly sessions: SessionManager,
     private readonly wrfc: WRFCRunner,
     private readonly mcpBridge?: McpBridge,
+    deps?: {
+      healthCheck: HealthCheck;
+      agentTracker: AgentTracker;
+      eventRecorder: EventRecorder;
+      stateStore: StateStore;
+    },
   ) {
     this.planEmitter = new PlanEmitter(conn);
     this.commandsEmitter = new CommandsEmitter(conn);
+
+    // ISS-025: Wire GoodVibesExtensions when runtime deps are available.
+    if (deps !== undefined) {
+      this._extensions = new GoodVibesExtensions(
+        eventBus,
+        deps.stateStore,
+        registry,
+        deps.healthCheck,
+        deps.agentTracker,
+        deps.eventRecorder,
+      );
+
+      // ISS-054: Subscribe to WRFC phase changes and push _goodvibes/status notifications.
+      // The orchestrator emits 'wrfc:state-changed' with { workId, sessionId, from, to, attempt }.
+      // Notifications are fire-and-forget — no response is expected from the client.
+      this.eventBus.on('wrfc:state-changed', (event) => {
+        const p = event.payload as { sessionId: string; to: string; attempt: number };
+        // completedSteps = attempt index; totalSteps = 0 (not known at this layer)
+        this._extensions!.pushStatus(conn, p.sessionId, p.to, p.attempt, 0).catch(() => {
+          // Swallow push errors — client may have disconnected
+        });
+      });
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -426,34 +467,37 @@ export class GoodVibesAgent implements Agent {
   /**
    * Handle GoodVibes extension methods.
    *
-   * Supported:
-   *   - `_goodvibes/state`  — return current runtime state
-   *   - `_goodvibes/agents` — return registered agent capabilities
+   * ISS-025: Delegates all _goodvibes/* calls to GoodVibesExtensions.handle().
+   * Non-_goodvibes/* methods throw METHOD_NOT_FOUND per ACP spec.
+   *
+   * Supported (via GoodVibesExtensions):
+   *   - `_goodvibes/state`     — full runtime state snapshot
+   *   - `_goodvibes/events`    — recent event stream
+   *   - `_goodvibes/agents`    — active agent list
+   *   - `_goodvibes/analytics` — token usage and metrics
    */
   async extMethod(
     method: string,
     params: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    switch (method) {
-      case '_goodvibes/state': {
-        const sessionId = params['sessionId'] as string | undefined;
-        if (sessionId) {
-          const context = await this.sessions.get(sessionId);
-          return { session: context ?? null };
-        }
-        return { runtime: 'goodvibes', version: '0.1.0' };
-      }
-
-      case '_goodvibes/agents': {
-        const spawners = this.registry.get<{ id: string; capabilities: string[] }>('spawner');
-        return { agents: spawners ?? [] };
-      }
-
-      default:
-        throw Object.assign(new Error(`Unknown extension method: ${method}`), {
-          code: ACP_ERROR_CODES.METHOD_NOT_FOUND,
-        });
+    // Non-extension methods are not routed here — reject immediately.
+    if (!method.startsWith('_goodvibes/')) {
+      throw Object.assign(new Error(`Unknown extension method: ${method}`), {
+        code: ACP_ERROR_CODES.METHOD_NOT_FOUND,
+      });
     }
+
+    // Delegate to GoodVibesExtensions when wired (ISS-025).
+    // Falls back to a minimal inline handler if deps were not provided at construction.
+    if (this._extensions !== undefined) {
+      // handle() returns Promise<unknown>; cast to the required return type.
+      // The cast is safe: all _goodvibes/* handlers return Record<string, unknown> shapes.
+      return this._extensions.handle(method, params) as Promise<Record<string, unknown>>;
+    }
+
+    // Fallback: _extensions not wired (composition root did not supply deps).
+    // Return a minimal response so the call doesn't hard-fail.
+    return { error: 'extensions_not_wired', method };
   }
 
   // -------------------------------------------------------------------------

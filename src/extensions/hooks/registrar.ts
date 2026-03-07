@@ -105,5 +105,27 @@ export class HookRegistrar {
         emitSessionDestroyed(bus, context);
       }
     );
+
+    // tool:execute — pre: permission check placeholder
+    engine.register(
+      'tool:execute',
+      'pre',
+      async (context: Record<string, unknown>) => {
+        // TODO: Wire PermissionGate.check() here when permission system is activated
+        // For now, always allow (no permission gate instantiated yet — see ISS-015)
+        return { ...context, _permissionChecked: true };
+      },
+      100
+    );
+
+    // tool:execute — post: completion tracker placeholder
+    engine.register(
+      'tool:execute',
+      'post',
+      async (_context: Record<string, unknown>, _result: unknown) => {
+        // TODO: Emit tool_call_update with completion status
+      },
+      100
+    );
   }
 }

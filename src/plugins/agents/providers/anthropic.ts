@@ -28,14 +28,18 @@ export class AnthropicProvider implements ILLMProvider {
   }
 
   async chat(params: ChatParams): Promise<ChatResponse> {
-    const response = await this.client.messages.create({
-      model: params.model,
-      system: params.systemPrompt,
-      messages: this.toAnthropicMessages(params.messages),
-      max_tokens: params.maxTokens ?? 4096,
-      ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
-      ...(params.tools?.length ? { tools: this.toAnthropicTools(params.tools) } : {}),
-    });
+    const response = await this.client.messages.create(
+      {
+        model: params.model,
+        system: params.systemPrompt,
+        messages: this.toAnthropicMessages(params.messages),
+        max_tokens: params.maxTokens ?? 4096,
+        ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
+        ...(params.tools?.length ? { tools: this.toAnthropicTools(params.tools) } : {}),
+      },
+      // Forward AbortSignal so callers can cancel in-flight requests
+      params.signal ? { signal: params.signal } : undefined,
+    );
 
     return {
       content: this.fromAnthropicContent(response.content),
@@ -48,16 +52,25 @@ export class AnthropicProvider implements ILLMProvider {
   }
 
   async *stream(params: ChatParams): AsyncIterable<ChatChunk> {
-    const streamInstance = this.client.messages.stream({
-      model: params.model,
-      system: params.systemPrompt,
-      messages: this.toAnthropicMessages(params.messages),
-      max_tokens: params.maxTokens ?? 4096,
-      ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
-      ...(params.tools?.length ? { tools: this.toAnthropicTools(params.tools) } : {}),
-    });
+    const streamInstance = this.client.messages.stream(
+      {
+        model: params.model,
+        system: params.systemPrompt,
+        messages: this.toAnthropicMessages(params.messages),
+        max_tokens: params.maxTokens ?? 4096,
+        ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
+        ...(params.tools?.length ? { tools: this.toAnthropicTools(params.tools) } : {}),
+      },
+      // Forward AbortSignal so callers can cancel in-flight streams
+      params.signal ? { signal: params.signal } : undefined,
+    );
 
     for await (const event of streamInstance) {
+      // Honour AbortSignal between stream events
+      if (params.signal?.aborted) {
+        streamInstance.abort();
+        return;
+      }
       if (event.type === 'content_block_delta') {
         if (event.delta.type === 'text_delta') {
           yield { type: 'text_delta', text: event.delta.text };

@@ -11,6 +11,17 @@
  *
  * Uses only Node/Bun built-in modules: node:http, node:crypto.
  * No express / fastify dependency.
+ *
+ * TODO(ISS-018): IPC protocol uses a custom event-based format, not JSON-RPC 2.0.
+ * This module emits events onto EventBus using a proprietary normalized event
+ * format (NormalizedEvent). To comply with ACP JSON-RPC 2.0, incoming webhook
+ * payloads should be wrapped in a JSON-RPC 2.0 envelope:
+ *   { "jsonrpc": "2.0", "method": "<event-type>", "params": <payload>, "id": <req-id> }
+ * and responses should conform to:
+ *   { "jsonrpc": "2.0", "result": ..., "id": <req-id> }  (success)
+ *   { "jsonrpc": "2.0", "error": { "code": ..., "message": ... }, "id": <req-id> }  (error)
+ * The NormalizerRegistry and EventBus emission patterns would need to be updated
+ * to produce/consume this envelope format throughout the IPC layer.
  */
 
 import { createHmac, timingSafeEqual } from 'node:crypto';

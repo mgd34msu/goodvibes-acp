@@ -162,6 +162,7 @@ export class WRFCOrchestrator {
       this._checkAbort(signal);
       machine.transition(WRFC_EVENTS.START);
 
+      // WRFC spec: attempt 1 = 'engineer', subsequent = 'fixer'. Currently no retry loop.
       const agentConfig: AgentConfig = {
         type: 'engineer',
         task,
@@ -298,15 +299,14 @@ export class WRFCOrchestrator {
         (err instanceof DOMException && err.name === 'AbortError') || signal?.aborted;
 
       if (isAbort) {
-        // Drive to escalated rather than failed so callers can distinguish cancellation.
-        // A 'cancelled' terminal state is not available in L0 types; escalated is the
-        // closest semantic fit and conveys "did not complete normally".
+        // Drive the machine to a terminal state via the FAIL event.
+        // A dedicated CANCEL event/state is not available in the current L0 types;
+        // the cancelledAt timestamp in context distinguishes this from a genuine failure.
         if (!WRFC_TERMINAL_STATES.has(machine.current())) {
           machine.transition(WRFC_EVENTS.FAIL);
         }
         machine.updateContext((ctx) => ({
           ...ctx,
-          state: 'escalated' as const,
           cancelledAt: Date.now(),
         }));
         this._context = machine.context();
