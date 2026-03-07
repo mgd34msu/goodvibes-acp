@@ -189,6 +189,8 @@ export class McpBridge {
       return conn;
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
+      // NOTE: console.error is intentional here — this runs during MCP bridge bootstrap,
+      // before a structured logger is available. The error is also propagated via eventBus.
       console.error(`[McpBridge] Failed to connect to MCP server "${serverId}": ${error}`);
       this.eventBus.emit('mcp:error', { serverId, error });
       return null;
@@ -222,6 +224,8 @@ export class McpBridge {
     // NOTE: Agent capability declaration (`mcp: { http: false, sse: false }`) should
     // be added to the agent descriptor in src/extensions/acp/agent.ts once that
     // field is part of the ACP capability schema.
+    // NOTE: console.error is intentional here — this runs during MCP bridge bootstrap,
+    // before a structured logger is available.
     console.error(`[MCP] Skipping non-stdio server "${server.name}": HTTP/SSE transport not yet supported`);
     return null;
   }

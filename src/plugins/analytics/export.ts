@@ -8,7 +8,6 @@
 import type {
   AnalyticsExportFormat,
   SessionAnalytics,
-  TokenUsageEntry,
   AnalyticsStore,
 } from './types.js';
 
@@ -133,8 +132,4 @@ export class AnalyticsExporter {
     return value;
   }
 
-  private _formatEntry(_entry: TokenUsageEntry): string {
-    // Utility kept for potential future single-entry formatting
-    return '';
-  }
 }

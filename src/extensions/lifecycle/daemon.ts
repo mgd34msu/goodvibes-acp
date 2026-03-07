@@ -248,8 +248,10 @@ export class DaemonManager {
         resolve();
         return;
       }
-      this._tcpServer.close(() => resolve());
+      // Null guard: capture reference before nulling to prevent a double-close race
+      const server = this._tcpServer;
       this._tcpServer = null;
+      server.close(() => resolve());
     });
   }
 

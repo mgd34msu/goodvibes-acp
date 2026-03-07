@@ -314,8 +314,8 @@ export class AccessibilityChecker {
           const issues = rule.check(source);
           allIssues.push(...issues);
         }
-      } catch {
-        // skip unreadable files
+      } catch (err: unknown) {
+        console.error('[Accessibility] file read error:', err);
       }
     }
 

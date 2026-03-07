@@ -55,12 +55,9 @@ export { Config } from './config.js';
 export { Registry } from './registry.js';
 
 // Trigger engine
-export type {
-  TriggerDefinition,
-  TriggerContext,
-  ITriggerHandler,
-  TriggerDefinitionWithCondition,
-} from './trigger-engine.js';
+export type { TriggerDefinition, TriggerContext } from '../types/trigger.js';
+export type { ITriggerHandler } from '../types/registry.js';
+export type { TriggerDefinitionWithCondition } from './trigger-engine.js';
 export { TriggerEngine } from './trigger-engine.js';
 
 // Queue

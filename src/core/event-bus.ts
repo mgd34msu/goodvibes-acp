@@ -74,7 +74,7 @@ export class EventBus {
   /** Write index for O(1) circular ring buffer insertion */
   private _writeIdx = 0;
   private _destroyed = false;
-  private _idCounter = 0;
+
 
   constructor(options: EventBusOptions = {}) {
     this._historyLimit = options.historyLimit ?? 1000;
@@ -301,7 +301,7 @@ export class EventBus {
   // --- Private helpers ---
 
   private _nextId(): string {
-    return `ev_${Date.now()}_${++this._idCounter}`;
+    return `ev_${crypto.randomUUID()}`;
   }
 
   private _emitError(sourceType: string, err: unknown): void {

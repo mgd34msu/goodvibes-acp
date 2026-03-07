@@ -72,15 +72,6 @@ export class WRFCHandlers {
     if (this._subscriptions.length > 0) return;
 
     this._subscriptions = [
-      this.eventBus.on('wrfc:state-changed', (event) => {
-        const p = event.payload;
-        if (!p || typeof p !== 'object' || !('workId' in p) || !('sessionId' in p)) {
-          console.error('[WRFCHandlers] Malformed wrfc:state-changed payload', p);
-          return;
-        }
-        this._onStateChanged(p as { workId: string; sessionId: string; from: WRFCState; to: WRFCState; attempt: number });
-      }),
-
       this.eventBus.on('wrfc:work-complete', (event) => {
         const p = event.payload;
         if (!p || typeof p !== 'object' || !('workId' in p) || !('sessionId' in p)) {
@@ -145,25 +136,6 @@ export class WRFCHandlers {
   // -------------------------------------------------------------------------
   // Private event handlers
   // -------------------------------------------------------------------------
-
-  private _onStateChanged(payload: {
-    workId: string;
-    sessionId: string;
-    from: WRFCState;
-    to: WRFCState;
-    attempt: number;
-  }): void {
-    const { workId, sessionId, from, to, attempt } = payload;
-
-    this.eventBus.emit('wrfc:phase-changed', {
-      workId,
-      sessionId,
-      from,
-      to,
-      attempt,
-      timestamp: Date.now(),
-    });
-  }
 
   private _onWorkComplete(payload: {
     workId: string;

@@ -11,7 +11,7 @@
  * (per ACP KB dual-path guidance).
  */
 
-import { appendFile, readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { EventBus } from '../../core/event-bus.js';
 
@@ -92,17 +92,27 @@ async function prependEntry(
     // file may not exist yet; ensureFiles handles creation
   }
 
-  // Determine where to insert: after the file-level header (first blank line).
+  // Normalise: ensure existing content ends with a newline when non-empty
+  // so concatenation never produces a run-together line.
+  if (existing.length > 0 && !existing.endsWith('\n')) {
+    existing += '\n';
+  }
+
   const newBlock = `${entry}\n\n---\n`;
 
-  if (existing.includes('\n\n')) {
+  if (existing === '') {
+    // Empty file: write header + first entry.
+    await writeFile(filePath, `${header}${newBlock}`, 'utf-8');
+  } else if (existing.includes('\n\n')) {
+    // Insert after the first blank line (after the file-level header).
     const firstBreak = existing.indexOf('\n\n');
     const before = existing.slice(0, firstBreak + 2);
     const after = existing.slice(firstBreak + 2);
     await writeFile(filePath, `${before}${newBlock}${after}`, 'utf-8');
   } else {
-    // Fallback: just append (should not normally happen after ensureFiles).
-    await appendFile(filePath, `\n${newBlock}`);
+    // File exists but has no blank line separator (unexpected / corrupted);
+    // append a separator then the new block rather than silently mangling.
+    await writeFile(filePath, `${existing}\n${newBlock}`, 'utf-8');
   }
 }
 

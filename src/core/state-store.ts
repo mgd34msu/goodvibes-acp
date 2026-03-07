@@ -6,6 +6,7 @@
  */
 
 import type { Disposable } from './event-bus.js';
+import { deepMerge } from './utils.js';
 
 /** Serialized format for a single namespace's state */
 export interface SerializedNamespace {
@@ -39,37 +40,6 @@ export type StateChangeCallback = (event: StateChangeEvent) => void;
 
 /** Current schema version for serialized state */
 const STATE_SCHEMA_VERSION = '1.0.0';
-
-/**
- * Deep merge two objects. Arrays are replaced, not merged.
- * Returns a new object without mutating inputs.
- */
-function deepMerge<T extends Record<string, unknown>>(
-  target: T,
-  source: Partial<T>
-): T {
-  const result: Record<string, unknown> = { ...target };
-  for (const key of Object.keys(source)) {
-    const srcVal = source[key as keyof T];
-    const tgtVal = target[key as keyof T];
-    if (
-      srcVal !== null &&
-      typeof srcVal === 'object' &&
-      !Array.isArray(srcVal) &&
-      tgtVal !== null &&
-      typeof tgtVal === 'object' &&
-      !Array.isArray(tgtVal)
-    ) {
-      result[key] = deepMerge(
-        tgtVal as Record<string, unknown>,
-        srcVal as Record<string, unknown>
-      );
-    } else if (srcVal !== undefined) {
-      result[key] = srcVal;
-    }
-  }
-  return result as T;
-}
 
 /**
  * Key-value state store with namespace isolation.

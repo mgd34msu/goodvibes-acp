@@ -33,7 +33,10 @@ export type SkillDefinition = {
   dependencies?: string[];
   /** Whether this skill is always active (protocol skills) */
   alwaysActive?: boolean;
-  /** Content template (the actual skill prompt/instructions) */
+  /**
+   * Content template (the actual skill prompt/instructions).
+   * Recommended max: 50,000 chars.
+   */
   content: string;
   /** Optional validation script path */
   validationScript?: string;

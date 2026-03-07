@@ -115,6 +115,9 @@ export class SessionManager {
 
     const history = this._store.get<HistoryMessage[]>(NS, `${HISTORY_PREFIX}${sessionId}`) ?? [];
     const context: SessionContext = { ...stored, history };
+
+    this._bus.emit('session:loaded', { sessionId });
+
     return { context, history };
   }
 
@@ -237,6 +240,12 @@ export class SessionManager {
 
   /**
    * Set a named config option on a session.
+   *
+   * Valid keys:
+   *   - `'mode'`  — session operating mode (see {@link SessionMode})
+   *   - `'model'` — model identifier string passed to the agent layer
+   * Additional keys may be used for custom config options, but only `'mode'`
+   * and `'model'` are recognized by the agent layer's `buildConfigOptions()`.
    *
    * Returns the full updated configOptions record so callers can reflect
    * the new state back to ACP (SetSessionConfigOption response).

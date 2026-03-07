@@ -85,6 +85,10 @@ function buildPredicate(
 export class DirectiveQueue {
   private readonly _queue: Queue<Directive>;
   private readonly _bus: EventBus;
+  /** Guard flag — true while process() is executing */
+  private _processing = false;
+  /** Buffer for directives enqueued during an active process() call */
+  private _pending: Directive[] = [];
 
   constructor(eventBus: EventBus) {
     this._queue = new Queue<Directive>();
@@ -103,7 +107,13 @@ export class DirectiveQueue {
    * @param directive - Directive to enqueue
    */
   enqueue(directive: Directive): void {
-    this._queue.enqueue(directive, PRIORITY_WEIGHT[directive.priority]);
+    if (this._processing) {
+      // Buffer directives that arrive during an active process() call so they
+      // are not lost and are drained at the end of the current processing cycle.
+      this._pending.push(directive);
+    } else {
+      this._queue.enqueue(directive, PRIORITY_WEIGHT[directive.priority]);
+    }
     this._bus.emit('directive:enqueued', { directiveId: directive.id, action: directive.action, priority: directive.priority });
   }
 
@@ -214,29 +224,43 @@ export class DirectiveQueue {
   async process(
     handler: (directive: Directive) => Promise<DirectiveResult>,
   ): Promise<DirectiveResult[]> {
-    const directives = this.drain();
+    if (this._processing) return []; // prevent reentrancy
+    this._processing = true;
     const results: DirectiveResult[] = [];
 
-    for (const directive of directives) {
-      let result: DirectiveResult;
+    try {
+      while (this._queue.size() > 0) {
+        const directive = this._queue.dequeue()!;
+        let result: DirectiveResult;
 
-      try {
-        result = await handler(directive);
-      } catch (err) {
-        result = {
-          directive,
-          status: 'failed',
-          error: err instanceof Error ? err.message : String(err),
-          processedAt: Date.now(),
-        };
+        try {
+          result = await handler(directive);
+        } catch (err) {
+          result = {
+            directive,
+            status: 'failed',
+            error: err instanceof Error ? err.message : String(err),
+            processedAt: Date.now(),
+          };
+        }
+
+        results.push(result);
+        this._bus.emit('directive:processed', {
+          directiveId: directive.id,
+          status: result.status,
+          processedAt: result.processedAt,
+        });
+
+        // Drain any directives that were buffered during handler execution
+        if (this._pending.length > 0) {
+          for (const pending of this._pending) {
+            this._queue.enqueue(pending, PRIORITY_WEIGHT[pending.priority]);
+          }
+          this._pending = [];
+        }
       }
-
-      results.push(result);
-      this._bus.emit('directive:processed', {
-        directiveId: directive.id,
-        status: result.status,
-        processedAt: result.processedAt,
-      });
+    } finally {
+      this._processing = false;
     }
 
     return results;

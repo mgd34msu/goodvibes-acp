@@ -7,7 +7,7 @@
  */
 
 import type { AgentSideConnection } from '@agentclientprotocol/sdk';
-import { TerminalHandle as AcpTerminalHandle } from '@agentclientprotocol/sdk';
+import type { TerminalHandle as AcpTerminalHandle } from '@agentclientprotocol/sdk';
 import type * as schema from '@agentclientprotocol/sdk';
 import type { ITerminal, TerminalHandle, TerminalCreateOptions, ExitResult } from '../../types/registry.js';
 import { spawn, type ChildProcess } from 'node:child_process';

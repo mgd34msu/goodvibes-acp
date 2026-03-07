@@ -9,6 +9,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import type { RuntimeConfig } from '../types/config.js';
 import type { Disposable } from './event-bus.js';
+import { deepMerge } from './utils.js';
 
 export type { RuntimeConfig };
 
@@ -64,33 +65,6 @@ export type ConfigChangeCallback = (key: string, newValue: unknown, oldValue: un
  */
 function deepClone<T>(obj: T): T {
   return JSON.parse(JSON.stringify(obj)) as T;
-}
-
-/**
- * Deep merge two objects. Arrays are replaced, not merged.
- */
-function deepMerge<T extends Record<string, unknown>>(target: T, source: Record<string, unknown>): T {
-  const result: Record<string, unknown> = { ...target };
-  for (const key of Object.keys(source)) {
-    const srcVal = source[key];
-    const tgtVal = target[key as keyof T];
-    if (
-      srcVal !== null &&
-      typeof srcVal === 'object' &&
-      !Array.isArray(srcVal) &&
-      tgtVal !== null &&
-      typeof tgtVal === 'object' &&
-      !Array.isArray(tgtVal)
-    ) {
-      result[key] = deepMerge(
-        tgtVal as Record<string, unknown>,
-        srcVal as Record<string, unknown>
-      );
-    } else if (srcVal !== undefined) {
-      result[key] = srcVal;
-    }
-  }
-  return result as T;
 }
 
 /**
@@ -358,8 +332,8 @@ export class Config {
     for (const listener of this._listeners) {
       try {
         listener(key, newValue, oldValue);
-      } catch {
-        // Swallow errors from config change listeners
+      } catch (err: unknown) {
+        console.error('[Config] listener error for key', key, err);
       }
     }
   }

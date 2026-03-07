@@ -50,7 +50,7 @@ export class ShutdownManager {
    */
   register(name: string, order: number, handler: () => Promise<void>): void {
     this._handlers.push({ name, order, handler });
-    // Keep sorted descending so iteration is always in correct order
+    // Sort descending on each registration so shutdown() always iterates highest-priority first
     this._handlers.sort((a, b) => b.order - a.order);
   }
 

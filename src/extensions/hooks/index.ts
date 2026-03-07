@@ -7,3 +7,4 @@
  */
 
 export { HookRegistrar } from './registrar.js';
+export * from './built-ins.js';

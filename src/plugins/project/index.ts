@@ -75,6 +75,9 @@ export const ProjectPlugin: PluginRegistration = {
     capabilities: ['project-analysis'],
   },
   register: (registry: unknown) => {
+    if (registry == null) {
+      throw new Error('ProjectPlugin: registry must not be null or undefined');
+    }
     (registry as Registry).register('project-analyzer', new ProjectAnalyzer());
   },
   shutdown: async () => {},

@@ -57,14 +57,14 @@ export class IpcRouter {
   /**
    * Register a handler for a named IPC method.
    *
-   * If a handler is already registered for the given `type`, it is replaced.
+   * If a handler is already registered for the given `routeMethod`, it is replaced.
    *
-   * @param type    The method name (e.g. 'ping', 'status')
-   * @param handler Function that receives the full IpcRequest and returns
-   *                a response payload (sync or async).
+   * @param routeMethod The method name (e.g. 'ping', 'status')
+   * @param handler     Function that receives the full IpcRequest and returns
+   *                    a response payload (sync or async).
    */
-  register(type: string, handler: IpcHandler): void {
-    this._handlers.set(type, handler);
+  register(routeMethod: string, handler: IpcHandler): void {
+    this._handlers.set(routeMethod, handler);
   }
 
   /**

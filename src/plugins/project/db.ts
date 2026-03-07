@@ -17,6 +17,10 @@ import type { DbSchema, TableInfo, ColumnInfo, IndexInfo, Relation, SchemaAnalys
  * Line-by-line Prisma schema parser.
  * Handles model blocks, fields, relations, and @@index directives.
  * Returns an empty schema on parse errors.
+ *
+ * @note Uses direct `node:fs/promises` calls rather than the ITextFileAccess
+ * abstraction used elsewhere in the project. If testability via mock file
+ * access becomes a requirement, consider injecting ITextFileAccess here.
  */
 export class DatabaseTools {
   /**

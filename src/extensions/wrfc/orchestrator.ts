@@ -180,7 +180,7 @@ export class WRFCOrchestrator {
         task,
         output: agentResult.output,
         filesModified: agentResult.filesModified,
-        errors: agentResult.errors.map((e) => e.message ?? `Unknown error (code: ${e.code})`),
+        errors: (agentResult.errors ?? []).map((e) => e.message ?? `Unknown error (code: ${e.code})`),
         durationMs: agentResult.durationMs,
       };
 

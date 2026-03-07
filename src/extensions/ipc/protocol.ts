@@ -73,16 +73,29 @@ export function serializeMessage(message: IpcMessage): string {
 export function deserializeMessage(line: string): IpcMessage {
   const parsed: unknown = JSON.parse(line.trim());
 
+  const rec = parsed as Record<string, unknown>;
+
   if (
     typeof parsed !== 'object' ||
     parsed === null ||
-    typeof (parsed as Record<string, unknown>).type !== 'string' ||
-    typeof (parsed as Record<string, unknown>).id !== 'string' ||
-    typeof (parsed as Record<string, unknown>).timestamp !== 'number'
+    typeof rec.type !== 'string' ||
+    typeof rec.id !== 'string' ||
+    typeof rec.timestamp !== 'number'
   ) {
     throw new TypeError(
       'IPC message missing required fields: type (string), id (string), timestamp (number)',
     );
+  }
+
+  // Additional structural validation per message type
+  if (rec.type === 'request' && typeof rec.method !== 'string') {
+    throw new TypeError('IPC request message missing required field: method (string)');
+  }
+  if (rec.type === 'response' && typeof rec.correlationId !== 'string') {
+    throw new TypeError('IPC response message missing required field: correlationId (string)');
+  }
+  if (rec.type === 'notification' && typeof rec.event !== 'string') {
+    throw new TypeError('IPC notification message missing required field: event (string)');
   }
 
   return parsed as IpcMessage;

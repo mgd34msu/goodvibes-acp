@@ -13,6 +13,14 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 // ---------------------------------------------------------------------------
+// Module-level constants
+// ---------------------------------------------------------------------------
+
+const VALID_ENCODINGS = new Set<BufferEncoding>([
+  'utf-8', 'utf8', 'ascii', 'base64', 'hex', 'latin1', 'binary', 'ucs-2', 'ucs2', 'utf16le',
+]);
+
+// ---------------------------------------------------------------------------
 // AcpFileSystem
 // ---------------------------------------------------------------------------
 
@@ -55,7 +63,6 @@ export class AcpFileSystem implements ITextFileAccess {
     }
 
     // Direct disk fallback
-    const VALID_ENCODINGS = new Set<BufferEncoding>(['utf-8', 'utf8', 'ascii', 'base64', 'hex', 'latin1', 'binary', 'ucs-2', 'ucs2', 'utf16le']);
     const encoding = (options?.encoding ?? 'utf-8') as string;
     if (!VALID_ENCODINGS.has(encoding as BufferEncoding)) {
       throw new Error(`Unsupported encoding: ${encoding}`);
@@ -93,7 +100,6 @@ export class AcpFileSystem implements ITextFileAccess {
 
     // Direct disk fallback — ensure parent directory exists
     await mkdir(dirname(path), { recursive: true });
-    const VALID_ENCODINGS = new Set<BufferEncoding>(['utf-8', 'utf8', 'ascii', 'base64', 'hex', 'latin1', 'binary', 'ucs-2', 'ucs2', 'utf16le']);
     const encoding = (options?.encoding ?? 'utf-8') as string;
     if (!VALID_ENCODINGS.has(encoding as BufferEncoding)) {
       throw new Error(`Unsupported encoding: ${encoding}`);

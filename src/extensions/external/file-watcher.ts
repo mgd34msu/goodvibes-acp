@@ -12,6 +12,7 @@
  */
 
 import { watch, type FSWatcher } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import type { EventBus } from '../../core/event-bus.js';
@@ -193,11 +194,6 @@ export class FileWatcher {
     // Ignore filter
     if (this._shouldIgnore(fullPath, ignore)) return;
 
-    // Map native event type to our change type
-    // node:fs watch only emits 'rename' (create/delete) and 'change' (modify)
-    const changeType: FileChangeType =
-      event === 'rename' ? 'created' : 'modified';
-
     // Debounce: cancel any existing timer for this path, then re-set
     const existing = this._timers.get(fullPath);
     if (existing !== undefined) {
@@ -206,12 +202,34 @@ export class FileWatcher {
 
     const timer = setTimeout(() => {
       this._timers.delete(fullPath);
-      const payload: FileChangedPayload = {
-        path: fullPath,
-        changeType,
-        timestamp: Date.now(),
-      };
-      this._bus.emit('external:file-changed', payload);
+      if (event === 'rename') {
+        // Distinguish created vs deleted: stat the file to check existence
+        stat(fullPath).then(
+          () => {
+            // File exists — it was created or renamed-to
+            this._bus.emit('external:file-changed', {
+              path: fullPath,
+              changeType: 'created',
+              timestamp: Date.now(),
+            } satisfies FileChangedPayload);
+          },
+          () => {
+            // File does not exist — it was deleted or renamed-from
+            this._bus.emit('external:file-changed', {
+              path: fullPath,
+              changeType: 'deleted',
+              timestamp: Date.now(),
+            } satisfies FileChangedPayload);
+          },
+        );
+      } else {
+        // 'change' event — file was modified
+        this._bus.emit('external:file-changed', {
+          path: fullPath,
+          changeType: 'modified',
+          timestamp: Date.now(),
+        } satisfies FileChangedPayload);
+      }
     }, debounceMs);
 
     this._timers.set(fullPath, timer);

@@ -29,6 +29,8 @@ export type AgentFailedPayload = { metadata: AgentMetadata };
 export class AgentTracker {
   private readonly _store: StateStore;
   private readonly _bus: EventBus;
+  /** Cached count of agents in 'spawned' or 'running' status */
+  private _activeCount = 0;
 
   constructor(stateStore: StateStore, eventBus: EventBus) {
     this._store = stateStore;
@@ -57,6 +59,7 @@ export class AgentTracker {
     };
 
     this._store.set<AgentMetadata>(NS, handle.id, metadata);
+    this._activeCount++;
 
     this._bus.emit<AgentRegisteredPayload>('agent:registered', { metadata });
   }
@@ -97,6 +100,9 @@ export class AgentTracker {
       if (updated.startedAt !== undefined) {
         updated.durationMs = now - updated.startedAt;
       }
+      // Decrement active count when transitioning from an active status to terminal
+      const wasActive = from === 'spawned' || from === 'running';
+      if (wasActive) this._activeCount = Math.max(0, this._activeCount - 1);
     }
 
     this._store.set<AgentMetadata>(NS, agentId, updated);
@@ -135,15 +141,13 @@ export class AgentTracker {
     );
   }
 
-  /** Number of agents currently in `'spawned'` or `'running'` status. */
+  /**
+   * Number of agents currently in `'spawned'` or `'running'` status.
+   * Maintained via increment/decrement on register() and updateStatus() to avoid
+   * O(n) iteration over all stored agents on every call.
+   */
   activeCount(): number {
-    return this._store
-      .keys(NS)
-      .filter((key) => {
-        const m = this._store.get<AgentMetadata>(NS, key);
-        return m?.status === 'spawned' || m?.status === 'running';
-      })
-      .length;
+    return this._activeCount;
   }
 
   // ---------------------------------------------------------------------------

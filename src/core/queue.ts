@@ -64,20 +64,22 @@ export class Queue<T> {
       priority,
       seq: this._seqCounter++,
     };
-    // Insert in sorted position for efficient dequeue
+    // Insert in sorted position for efficient dequeue using binary search
     // Higher priority first; same priority: lower seq first (FIFO)
-    let insertAt = this._entries.length;
-    for (let i = 0; i < this._entries.length; i++) {
-      const existing = this._entries[i];
+    let low = 0, high = this._entries.length;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      const existing = this._entries[mid];
       if (
-        entry.priority > existing.priority ||
-        (entry.priority === existing.priority && entry.seq < existing.seq)
+        existing.priority > entry.priority ||
+        (existing.priority === entry.priority && existing.seq < entry.seq)
       ) {
-        insertAt = i;
-        break;
+        low = mid + 1;
+      } else {
+        high = mid;
       }
     }
-    this._entries.splice(insertAt, 0, entry);
+    this._entries.splice(low, 0, entry);
   }
 
   /**

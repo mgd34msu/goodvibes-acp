@@ -151,6 +151,12 @@ export class ServiceRegistry {
    * @param config Service configuration
    */
   register(name: string, config: ServiceConfig): void {
+    // Validate endpoint is a valid URL
+    try {
+      new URL(config.endpoint);
+    } catch {
+      throw new Error(`ServiceRegistry: invalid endpoint URL for service '${name}': ${config.endpoint}`);
+    }
     const entry: ServiceEntry = {
       name,
       config,

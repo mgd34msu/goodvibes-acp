@@ -45,6 +45,9 @@ export class SessionSync {
     const filePath = this._sessionPath(sessionId);
     try {
       const raw = await readFile(filePath, 'utf-8');
+      // NOTE: JSON.parse result is cast to SessionAnalytics without runtime validation.
+      // Callers should treat the returned object as untrusted if the storage file
+      // may have been written by an external process or an older schema version.
       const session = JSON.parse(raw) as SessionAnalytics;
       this._store.sessions.set(sessionId, session);
       return session;

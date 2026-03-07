@@ -75,7 +75,10 @@ export class McpClient extends EventEmitter {
     super();
     this._process = process;
 
-    const rl = createInterface({ input: this._process.stdout! });
+    if (!this._process.stdout) {
+      throw new Error('[McpClient] spawned process has no stdout — cannot read MCP responses');
+    }
+    const rl = createInterface({ input: this._process.stdout });
 
     rl.on('line', (line) => {
       const trimmed = line.trim();
@@ -197,14 +200,19 @@ export class McpClient extends EventEmitter {
         reject: (reason) => { clearTimeout(timer); reject(reason); },
       });
       const msg: JsonRpcRequest = { jsonrpc: '2.0', id, method, params };
-      this._process.stdin!.write(JSON.stringify(msg) + '\n', 'utf8');
+      if (!this._process.stdin) {
+        reject(new Error('stdin is not available'));
+        return;
+      }
+      this._process.stdin.write(JSON.stringify(msg) + '\n', 'utf8');
     });
   }
 
   private _notify(method: string, params: unknown): void {
     if (this._closed) return;
+    if (!this._process.stdin) return;
     const msg = { jsonrpc: '2.0', method, params };
-    this._process.stdin!.write(JSON.stringify(msg) + '\n', 'utf8');
+    this._process.stdin.write(JSON.stringify(msg) + '\n', 'utf8');
   }
 
   private _assertReady(): void {

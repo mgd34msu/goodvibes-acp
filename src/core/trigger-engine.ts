@@ -10,8 +10,6 @@ import type { Registry } from './registry.js';
 import type { TriggerDefinition, TriggerContext } from '../types/trigger.js';
 import type { ITriggerHandler } from '../types/registry.js';
 
-export type { TriggerDefinition, TriggerContext, ITriggerHandler };
-
 /**
  * L1 extension of TriggerDefinition: adds a runtime condition function that
  * receives the full typed EventRecord (L0's TriggerDefinition uses
@@ -29,6 +27,9 @@ interface TriggerState {
   enabled: boolean;
 }
 
+/** Cache of compiled RegExp instances keyed by pattern string */
+const _regexCache = new Map<string, RegExp | null>();
+
 /**
  * Check if an event type matches a trigger pattern.
  */
@@ -40,11 +41,15 @@ function matchesPattern(eventType: string, pattern: string): boolean {
   // Regex pattern: /pattern/
   if (pattern.startsWith('/') && pattern.endsWith('/') && pattern.length > 2) {
     const regexStr = pattern.slice(1, -1);
-    try {
-      return new RegExp(regexStr).test(eventType);
-    } catch {
-      return false;
+    if (!_regexCache.has(pattern)) {
+      try {
+        _regexCache.set(pattern, new RegExp(regexStr));
+      } catch {
+        _regexCache.set(pattern, null);
+      }
     }
+    const compiled = _regexCache.get(pattern);
+    return compiled !== null && compiled !== undefined ? compiled.test(eventType) : false;
   }
   // Prefix wildcard: 'session:*'
   if (pattern.endsWith(':*')) {

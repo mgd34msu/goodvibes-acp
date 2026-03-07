@@ -160,9 +160,9 @@ export class StateMachine<TState extends string, TContext> {
           const result = exitConfig.onExit(this._context, t.to);
           // Sync — we don't await hooks to keep transition atomic
           if (result instanceof Promise) {
-            result.catch(() => { /* errors in hooks are swallowed */ });
+            result.catch((err: unknown) => { console.error('[StateMachine] hook error:', err); });
           }
-        } catch { /* swallow */ }
+        } catch (err: unknown) { console.error('[StateMachine] hook error:', err); }
       }
 
       // Fire exit handlers
@@ -172,9 +172,9 @@ export class StateMachine<TState extends string, TContext> {
           try {
             const result = handler(t.to, this._context);
             if (result instanceof Promise) {
-              result.catch(() => { /* swallow */ });
+              result.catch((err: unknown) => { console.error('[StateMachine] hook error:', err); });
             }
-          } catch { /* swallow */ }
+          } catch (err: unknown) { console.error('[StateMachine] hook error:', err); }
         }
       }
 
@@ -187,9 +187,9 @@ export class StateMachine<TState extends string, TContext> {
         try {
           const result = enterConfig.onEnter(this._context, from);
           if (result instanceof Promise) {
-            result.catch(() => { /* swallow */ });
+            result.catch((err: unknown) => { console.error('[StateMachine] hook error:', err); });
           }
-        } catch { /* swallow */ }
+        } catch (err: unknown) { console.error('[StateMachine] hook error:', err); }
       }
 
       // Fire enter handlers
@@ -199,9 +199,9 @@ export class StateMachine<TState extends string, TContext> {
           try {
             const result = handler(from, this._context);
             if (result instanceof Promise) {
-              result.catch(() => { /* swallow */ });
+              result.catch((err: unknown) => { console.error('[StateMachine] hook error:', err); });
             }
-          } catch { /* swallow */ }
+          } catch (err: unknown) { console.error('[StateMachine] hook error:', err); }
         }
       }
 
@@ -222,9 +222,9 @@ export class StateMachine<TState extends string, TContext> {
         try {
           const result = handler(record, this._context);
           if (result instanceof Promise) {
-            result.catch(() => { /* swallow */ });
+            result.catch((err: unknown) => { console.error('[StateMachine] hook error:', err); });
           }
-        } catch { /* swallow */ }
+        } catch (err: unknown) { console.error('[StateMachine] hook error:', err); }
       }
 
       return true;

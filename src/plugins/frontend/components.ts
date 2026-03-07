@@ -58,14 +58,15 @@ export class ComponentAnalyzer {
    */
   async findComponents(projectRoot: string): Promise<ComponentNode[]> {
     const files = await this._findJsxFiles(resolve(projectRoot));
+    const settled = await Promise.allSettled(
+      files.map((file) => this._parseComponent(file))
+    );
     const results: ComponentNode[] = [];
-    for (const file of files) {
-      try {
-        const node = await this._parseComponent(file);
-        results.push(node);
-      } catch {
-        // skip unreadable files
+    for (const outcome of settled) {
+      if (outcome.status === 'fulfilled') {
+        results.push(outcome.value);
       }
+      // rejected outcomes are skipped (unreadable files)
     }
     return results;
   }

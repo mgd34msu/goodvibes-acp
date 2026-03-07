@@ -232,11 +232,15 @@ export class Scheduler {
     try {
       const result = task.config.handler();
       if (result instanceof Promise) {
-        result.then(done).catch(() => done());
+        result.then(done).catch((err: unknown) => {
+          console.error('[Scheduler] handler error:', err);
+          done();
+        });
       } else {
         done();
       }
-    } catch {
+    } catch (err: unknown) {
+      console.error('[Scheduler] handler error:', err);
       done();
     }
   }

@@ -99,7 +99,9 @@ export class McpToolCallBridge {
           .then(() =>
             emitter.emitToolCallUpdate(sessionId, toolCallId, 'in_progress'),
           )
-          .catch(() => {});
+          .catch((err: unknown) => {
+            console.error('[McpToolCallBridge] error:', err);
+          });
         return;
       }
 
@@ -119,7 +121,9 @@ export class McpToolCallBridge {
               '_goodvibes/content': [{ type: 'text', text: '' }],
             },
           )
-          .catch(() => {});
+          .catch((err: unknown) => {
+            console.error('[McpToolCallBridge] error:', err);
+          });
         return;
       }
 
@@ -139,7 +143,9 @@ export class McpToolCallBridge {
               '_goodvibes/content': [{ type: 'text', text: String(event.error ?? 'Unknown error') }],
             },
           )
-          .catch(() => {});
+          .catch((err: unknown) => {
+            console.error('[McpToolCallBridge] error:', err);
+          });
         return;
       }
     };

@@ -13,6 +13,7 @@ import {
   emitWrfcCompleted,
   emitSessionCreated,
   emitSessionDestroyed,
+  type HookContext,
 } from './built-ins.js';
 
 /**
@@ -52,7 +53,7 @@ export class HookRegistrar {
       'agent:spawn',
       'pre',
       (context: Record<string, unknown>) => {
-        const validation = validateAgentConfig(context);
+        const validation = validateAgentConfig(context as HookContext);
         if (!validation.proceed) {
           // Return context with validation error metadata; engine continues
           return { ...context, _validationError: validation.reason };
@@ -66,7 +67,7 @@ export class HookRegistrar {
       'agent:spawn',
       'post',
       (context: Record<string, unknown>) => {
-        emitAgentSpawned(bus, context);
+        emitAgentSpawned(bus, context as HookContext);
       }
     );
 
@@ -75,7 +76,7 @@ export class HookRegistrar {
       'wrfc:review',
       'post',
       (context: Record<string, unknown>, result: unknown) => {
-        emitWrfcReviewScore(bus, context, result);
+        emitWrfcReviewScore(bus, context as HookContext, result);
       }
     );
 
@@ -84,7 +85,7 @@ export class HookRegistrar {
       'wrfc:complete',
       'post',
       (context: Record<string, unknown>) => {
-        emitWrfcCompleted(bus, context);
+        emitWrfcCompleted(bus, context as HookContext);
       }
     );
 
@@ -93,7 +94,7 @@ export class HookRegistrar {
       'session:create',
       'post',
       (context: Record<string, unknown>) => {
-        emitSessionCreated(bus, context);
+        emitSessionCreated(bus, context as HookContext);
       }
     );
 
@@ -102,7 +103,7 @@ export class HookRegistrar {
       'session:destroy',
       'post',
       (context: Record<string, unknown>) => {
-        emitSessionDestroyed(bus, context);
+        emitSessionDestroyed(bus, context as HookContext);
       }
     );
 

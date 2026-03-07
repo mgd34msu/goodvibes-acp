@@ -120,7 +120,16 @@ export class AgentCoordinator {
 
   /**
    * Map from queued AgentConfig objects to their pending resolve/reject.
-   * Uses reference equality (Map key = object reference).
+   *
+   * CONSTRAINT: Uses object reference equality as Map keys. This is intentional
+   * and correct because:
+   * 1. The same AgentConfig object reference is stored in `_queue` at enqueue-time.
+   * 2. The same reference is retrieved from `_queue.dequeue()` in `_drainQueue()`.
+   * 3. Therefore reference equality lookups always find the correct resolver.
+   *
+   * Do NOT replace with string-keyed Maps unless AgentConfig gains a guaranteed
+   * unique `id` field, as duplicating a config object (e.g. spreading) would
+   * break the lookup.
    */
   private readonly _pendingResolvers = new Map<
     AgentConfig,

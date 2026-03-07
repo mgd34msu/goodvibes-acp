@@ -26,6 +26,24 @@ import type {
 const SCHEMA_VERSION = '1.0.0';
 const MEMORY_FILE = 'memory.json';
 
+/** Numeric schema version for migration tracking. Bump when the persisted format changes. */
+const CURRENT_VERSION = 1;
+
+// ---------------------------------------------------------------------------
+// Versioned persistence format
+// ---------------------------------------------------------------------------
+
+/**
+ * Wrapper written to disk. Contains a `version` field so future schema changes
+ * can be applied incrementally via `_migrate`.
+ */
+interface PersistedMemory {
+  /** Schema version. Corresponds to CURRENT_VERSION. */
+  version: number;
+  /** The serialised MemoryStore payload. */
+  data: MemoryStore;
+}
+
 // ---------------------------------------------------------------------------
 // Filter types
 // ---------------------------------------------------------------------------
@@ -89,6 +107,8 @@ export class MemoryManager {
   private readonly _basePath: string;
   private readonly _bus: EventBus;
   private _store: MemoryStore;
+  /** Per-session scoped key-value namespace, keyed by sessionId. */
+  private _sessionStore: Map<string, Map<string, unknown>> = new Map();
 
   constructor(basePath: string, eventBus: EventBus) {
     this._basePath = basePath;
@@ -121,14 +141,30 @@ export class MemoryManager {
     const filePath = join(this._basePath, MEMORY_FILE);
     try {
       const raw = await readFile(filePath, 'utf-8');
-      const parsed = JSON.parse(raw) as MemoryStore;
-      this._store = {
-        $schema: parsed.$schema ?? SCHEMA_VERSION,
-        decisions: parsed.decisions ?? [],
-        patterns: parsed.patterns ?? [],
-        failures: parsed.failures ?? [],
-        preferences: parsed.preferences ?? [],
-      };
+      const parsed = JSON.parse(raw) as MemoryStore | PersistedMemory;
+      // Support both legacy format (plain MemoryStore) and versioned format (PersistedMemory)
+      if ('version' in parsed && 'data' in parsed) {
+        // Versioned format — apply migrations then unpack
+        const migrated = this._migrate(parsed as PersistedMemory);
+        const store = migrated.data;
+        this._store = {
+          $schema: store.$schema ?? SCHEMA_VERSION,
+          decisions: store.decisions ?? [],
+          patterns: store.patterns ?? [],
+          failures: store.failures ?? [],
+          preferences: store.preferences ?? [],
+        };
+      } else {
+        // Legacy format — treat raw object as MemoryStore directly
+        const store = parsed as MemoryStore;
+        this._store = {
+          $schema: store.$schema ?? SCHEMA_VERSION,
+          decisions: store.decisions ?? [],
+          patterns: store.patterns ?? [],
+          failures: store.failures ?? [],
+          preferences: store.preferences ?? [],
+        };
+      }
     } catch (err: unknown) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'ENOENT') {
@@ -149,7 +185,9 @@ export class MemoryManager {
   async save(): Promise<void> {
     await mkdir(this._basePath, { recursive: true });
     const filePath = join(this._basePath, MEMORY_FILE);
-    await writeFile(filePath, JSON.stringify(this._store, null, 2), 'utf-8');
+    // Write versioned format so future migrations have a version to compare against
+    const persisted: PersistedMemory = { version: CURRENT_VERSION, data: this._store };
+    await writeFile(filePath, JSON.stringify(persisted, null, 2), 'utf-8');
     this._bus.emit('memory:saved', { basePath: this._basePath });
   }
 
@@ -308,5 +346,79 @@ export class MemoryManager {
   /** Return all stored preferences. */
   allPreferences(): PreferenceRecord[] {
     return [...this._store.preferences];
+  }
+
+  // -------------------------------------------------------------------------
+  // Session-scoped key-value storage
+  // -------------------------------------------------------------------------
+
+  /**
+   * Retrieve a value scoped to a specific session.
+   *
+   * Session-scoped data is held in memory only — it is not persisted to disk
+   * and is cleared when the process exits.
+   *
+   * @param sessionId - The ACP session identifier.
+   * @param key - The key within that session's namespace.
+   * @returns The stored value, or `undefined` if not set.
+   */
+  getForSession(sessionId: string, key: string): unknown {
+    return this._sessionStore.get(sessionId)?.get(key);
+  }
+
+  /**
+   * Set a value scoped to a specific session.
+   *
+   * Session-scoped data is held in memory only — it is not persisted to disk
+   * and is cleared when the process exits.
+   *
+   * @param sessionId - The ACP session identifier.
+   * @param key - The key within that session's namespace.
+   * @param value - The value to store.
+   */
+  setForSession(sessionId: string, key: string, value: unknown): void {
+    let ns = this._sessionStore.get(sessionId);
+    if (!ns) {
+      ns = new Map<string, unknown>();
+      this._sessionStore.set(sessionId, ns);
+    }
+    ns.set(key, value);
+  }
+
+  /**
+   * Delete all session-scoped data for a given session.
+   * Call this when a session ends to avoid memory leaks.
+   *
+   * @param sessionId - The ACP session identifier to clear.
+   */
+  clearSession(sessionId: string): void {
+    this._sessionStore.delete(sessionId);
+  }
+
+  // -------------------------------------------------------------------------
+  // Private helpers
+  // -------------------------------------------------------------------------
+
+  /**
+   * Apply sequential schema migrations to a versioned persisted payload.
+   *
+   * Each migration step should transform the data from one version to the next.
+   * New migration steps should be added here as a `if (raw.version < N)` block.
+   *
+   * @param raw - The raw versioned object read from disk.
+   * @returns The migrated object at CURRENT_VERSION.
+   */
+  private _migrate(raw: PersistedMemory): PersistedMemory {
+    let result = { ...raw };
+
+    // Version 0 → 1: initial versioning, no structural changes needed
+    if (result.version < 1) {
+      result = { ...result, version: 1 };
+    }
+
+    // Future migrations:
+    // if (result.version < 2) { ... result = { ...result, version: 2 }; }
+
+    return { ...result, version: CURRENT_VERSION };
   }
 }

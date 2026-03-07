@@ -53,15 +53,23 @@ export class MockProvider implements ILLMProvider {
 
   /**
    * Streams the next queued response as chunks.
-   * Yields text_delta for each text ContentBlock, then a stop chunk.
-   * Non-text blocks (tool_use, tool_result) are skipped — only text emits deltas.
+   * Yields chunks for each ContentBlock in the response:
+   * - text blocks        -> text_delta chunk
+   * - tool_use blocks    -> tool_use_start chunk followed by a tool_use_delta chunk
+   *                         containing the serialised input JSON
+   * - tool_result blocks -> skipped (these are user-turn content, not assistant output)
+   * Finally emits a stop chunk.
    */
   async *stream(params: ChatParams): AsyncIterable<ChatChunk> {
     const response = await this.chat(params);
     for (const block of response.content) {
       if (block.type === 'text') {
         yield { type: 'text_delta', text: block.text };
+      } else if (block.type === 'tool_use') {
+        yield { type: 'tool_use_start', id: block.id, name: block.name };
+        yield { type: 'tool_use_delta', input_json: JSON.stringify(block.input) };
       }
+      // tool_result blocks are user-turn content and are not streamed
     }
     yield { type: 'stop', stopReason: response.stopReason, usage: response.usage };
   }

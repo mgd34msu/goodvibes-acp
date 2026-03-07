@@ -16,7 +16,7 @@ interface InternalPlanEntry {
   /** Stable identifier used internally to look up and update entries */
   id: string;
   /** Human-readable description sent as the ACP PlanEntry.content */
-  title: string;
+  content: string;
   status: acp.PlanEntryStatus;
   priority: acp.PlanEntryPriority;
 }
@@ -51,13 +51,13 @@ export class PlanEmitter {
     this.entries.clear();
     this.entries.set(`${workId}_work`, {
       id: `${workId}_work`,
-      title: 'Execute task',
+      content: 'Execute task',
       status: 'pending',
       priority: 'high',
     });
     this.entries.set(`${workId}_review`, {
       id: `${workId}_review`,
-      title: 'Review output',
+      content: 'Review output',
       status: 'pending',
       priority: 'high',
     });
@@ -76,18 +76,18 @@ export class PlanEmitter {
    * @param sessionId - ACP session ID
    * @param entryId   - ID of the entry to update
    * @param status    - New status
-   * @param title     - Optional replacement title
+   * @param content   - Optional replacement content
    */
   async updateEntry(
     sessionId: string,
     entryId: string,
     status: acp.PlanEntryStatus,
-    title?: string,
+    content?: string,
   ): Promise<void> {
     const entry = this.entries.get(entryId);
     if (entry) {
       entry.status = status;
-      if (title !== undefined) entry.title = title;
+      if (content !== undefined) entry.content = content;
     }
     await this.emitPlan(sessionId);
   }
@@ -121,7 +121,7 @@ export class PlanEmitter {
   async emitPlan(sessionId: string): Promise<void> {
     const planEntries: acp.PlanEntry[] = Array.from(this.entries.values()).map(
       (e): acp.PlanEntry => ({
-        content: e.title,
+        content: e.content,
         priority: e.priority,
         status: e.status,
       }),

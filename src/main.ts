@@ -9,7 +9,6 @@
  * All diagnostic output goes to stderr so stdout remains clean for ACP.
  */
 
-import { Readable, Writable } from 'node:stream';
 import type { Socket } from 'node:net';
 import * as acp from '@agentclientprotocol/sdk';
 import { EventBus } from './core/event-bus.js';
@@ -39,7 +38,7 @@ import { MemoryManager } from './extensions/memory/manager.js';
 import { LogsManager } from './extensions/logs/manager.js';
 import { HookEngine } from './core/hook-engine.js';
 import { HookRegistrar } from './extensions/hooks/registrar.js';
-import { ShutdownManager } from './extensions/lifecycle/shutdown.js';
+import { ShutdownManager, SHUTDOWN_ORDER } from './extensions/lifecycle/shutdown.js';
 import { HealthCheck } from './extensions/lifecycle/health.js';
 import { ReviewPlugin } from './plugins/review/index.js';
 import { AgentsPlugin, AgentSpawnerPlugin } from './plugins/agents/index.js';
@@ -53,7 +52,7 @@ import { EventRecorder } from './extensions/acp/event-recorder.js';
 import { GoodVibesExtensions } from './extensions/acp/extensions.js';
 import { ToolCallEmitter } from './extensions/acp/tool-call-emitter.js';
 import { AgentEventBridge } from './extensions/acp/agent-event-bridge.js';
-import { createTcpTransportFromSocket } from './extensions/acp/transport.js';
+import { createTcpTransportFromSocket, createStdioTransport } from './extensions/acp/transport.js';
 import type { AcpStream } from './extensions/acp/transport.js';
 
 // ---------------------------------------------------------------------------
@@ -110,19 +109,24 @@ const onProgressFactory: OnProgressFactory = (sessionId: string) =>
 // Register built-in hooks (validation, lifecycle events)
 hookRegistrar.registerBuiltins();
 
-// Register shutdown handlers for core services
-shutdownManager.register('memory', 10, () => memoryManager.save());
-// wrfcOrchestrator has no destroy — WRFC state lives in memory only
-shutdownManager.register('hooks', 90, async () => { hookEngine.destroy(); });
-shutdownManager.register('mcp-bridge', 20, () => mcpBridge.disconnectAll());
-shutdownManager.register('service-registry', 30, () => serviceRegistry.save());
-shutdownManager.register('ipc-socket', 40, () => ipcSocketServer.stop());
-shutdownManager.register('daemon', 50, () => daemonManager.stop());
+// Register shutdown handlers ordered by layer (descending = runs first).
+// L3 plugins (300+) → L2 services (200..299) → L1 core (100..199)
+// Within a layer, higher values run before lower values.
 
-// L3 plugin teardown (priority < 10 = before L2 services)
-shutdownManager.register('analytics-plugin', 5, async () => { await AnalyticsPlugin.shutdown?.(); });
-shutdownManager.register('project-plugin', 6, async () => { await ProjectPlugin.shutdown?.(); });
-shutdownManager.register('frontend-plugin', 7, async () => { await FrontendPlugin.shutdown?.(); });
+// L3 plugin teardown — must complete before L2 services are stopped
+shutdownManager.register('analytics-plugin', SHUTDOWN_ORDER.L3 + 3, async () => { await AnalyticsPlugin.shutdown?.(); });
+shutdownManager.register('project-plugin', SHUTDOWN_ORDER.L3 + 2, async () => { await ProjectPlugin.shutdown?.(); });
+shutdownManager.register('frontend-plugin', SHUTDOWN_ORDER.L3 + 1, async () => { await FrontendPlugin.shutdown?.(); });
+
+// L2 service teardown — ordered so dependents stop before dependencies:
+//   daemon (accepts new conns) → ipc-socket → mcp-bridge → service-registry → memory → hooks
+shutdownManager.register('daemon',           SHUTDOWN_ORDER.L2 + 60, () => daemonManager.stop());
+shutdownManager.register('ipc-socket',       SHUTDOWN_ORDER.L2 + 50, () => ipcSocketServer.stop());
+shutdownManager.register('mcp-bridge',       SHUTDOWN_ORDER.L2 + 40, () => mcpBridge.disconnectAll());
+shutdownManager.register('service-registry', SHUTDOWN_ORDER.L2 + 30, () => serviceRegistry.save());
+// wrfcOrchestrator has no destroy — WRFC state lives in memory only
+shutdownManager.register('memory',           SHUTDOWN_ORDER.L2 + 20, () => memoryManager.save());
+shutdownManager.register('hooks',            SHUTDOWN_ORDER.L2 + 10, async () => { hookEngine.destroy(); });
 
 ReviewPlugin.register(registry);
 AgentsPlugin.register(registry);
@@ -473,10 +477,9 @@ if (mode === 'daemon') {
   // Subprocess mode — stdio transport (original behaviour)
   // -------------------------------------------------------------------------
 
-  const stream = acp.ndJsonStream(
-    Writable.toWeb(process.stdout) as unknown as WritableStream<Uint8Array>,
-    Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>,
-  );
+  // Use the createStdioTransport helper from the transport module which
+  // encapsulates the Node→Web stream casting and ndjson wrapping.
+  const stream = createStdioTransport();
 
   const conn = createConnection(stream);
 

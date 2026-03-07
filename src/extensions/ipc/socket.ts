@@ -147,10 +147,22 @@ export class IpcSocketServer {
       remoteAddress: socket.remoteAddress ?? 'unix',
     });
 
-    socket.setEncoding('utf-8');
+    const decoder = new TextDecoder('utf-8', { fatal: true });
 
-    socket.on('data', (chunk: string) => {
-      this._handleData(state, chunk);
+    socket.on('data', (chunk: Buffer | string) => {
+      let text: string;
+      try {
+        text = typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+      } catch {
+        // Malformed UTF-8 sequence — reject the connection
+        this._eventBus.emit('ipc:error', {
+          remoteAddress: socket.remoteAddress ?? 'unix',
+          error: 'Malformed UTF-8 sequence in incoming data',
+        });
+        socket.destroy(new Error('Malformed UTF-8 sequence'));
+        return;
+      }
+      this._handleData(state, text);
     });
 
     socket.on('close', () => {

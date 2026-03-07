@@ -8,6 +8,21 @@
 import type { EventBus } from '../../core/event-bus.js';
 
 // ---------------------------------------------------------------------------
+// HookContext
+// ---------------------------------------------------------------------------
+
+/**
+ * Typed context object passed to all built-in hook handlers.
+ * Extensible via the index signature while keeping well-known fields typed.
+ */
+export interface HookContext {
+  event: string;
+  timestamp: number;
+  sessionId?: string;
+  [key: string]: unknown;
+}
+
+// ---------------------------------------------------------------------------
 // Pre-hook handlers
 // ---------------------------------------------------------------------------
 
@@ -16,7 +31,7 @@ import type { EventBus } from '../../core/event-bus.js';
  * Returns proceed=false if required fields are missing.
  */
 export function validateAgentConfig(
-  context: Record<string, unknown>
+  context: HookContext
 ): { proceed: boolean; reason?: string } {
   const required = ['type', 'task', 'sessionId'] as const;
   for (const field of required) {
@@ -40,7 +55,7 @@ export function validateAgentConfig(
  */
 export function emitAgentSpawned(
   eventBus: EventBus,
-  context: Record<string, unknown>
+  context: HookContext
 ): void {
   eventBus.emit('agent:spawned', context);
 }
@@ -50,7 +65,7 @@ export function emitAgentSpawned(
  */
 export function emitWrfcReviewScore(
   eventBus: EventBus,
-  context: Record<string, unknown>,
+  context: HookContext,
   result: unknown
 ): void {
   eventBus.emit('wrfc:review:score', { context, result });
@@ -61,7 +76,7 @@ export function emitWrfcReviewScore(
  */
 export function emitWrfcCompleted(
   eventBus: EventBus,
-  context: Record<string, unknown>
+  context: HookContext
 ): void {
   eventBus.emit('wrfc:completed', context);
 }
@@ -71,7 +86,7 @@ export function emitWrfcCompleted(
  */
 export function emitSessionCreated(
   eventBus: EventBus,
-  context: Record<string, unknown>
+  context: HookContext
 ): void {
   eventBus.emit('session:created', context);
 }
@@ -81,7 +96,7 @@ export function emitSessionCreated(
  */
 export function emitSessionDestroyed(
   eventBus: EventBus,
-  context: Record<string, unknown>
+  context: HookContext
 ): void {
   eventBus.emit('session:destroyed', context);
 }

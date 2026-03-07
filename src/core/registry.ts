@@ -33,9 +33,17 @@
  * ```
  */
 export class Registry {
-  /** Single-value registry: key → implementation */
+  /**
+   * Single-value registry: key → implementation.
+   * WARNING: Values are stored as `unknown`. Callers must ensure type correctness
+   * when using get<T>() — no runtime type validation is performed.
+   */
   private readonly _single = new Map<string, unknown>();
-  /** Multi-value registry: kind → Map<key, implementation> */
+  /**
+   * Multi-value registry: kind → Map<key, implementation>.
+   * WARNING: Values are stored as `unknown`. Callers must ensure type correctness
+   * when using getAll<T>() and getFromKind<T>() — no runtime type validation is performed.
+   */
   private readonly _multi = new Map<string, Map<string, unknown>>();
 
   /**
