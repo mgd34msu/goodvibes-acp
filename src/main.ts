@@ -38,6 +38,8 @@ import { MemoryManager } from './extensions/memory/manager.js';
 import { LogsManager } from './extensions/logs/manager.js';
 import { HookEngine } from './core/hook-engine.js';
 import { HookRegistrar } from './extensions/hooks/registrar.js';
+import { AnthropicProvider } from './plugins/agents/providers/anthropic.js';
+import { McpToolProxy } from './extensions/mcp/tool-proxy.js';
 import { ShutdownManager, SHUTDOWN_ORDER } from './extensions/lifecycle/shutdown.js';
 import { HealthCheck } from './extensions/lifecycle/health.js';
 import { ReviewPlugin } from './plugins/review/index.js';
@@ -144,6 +146,19 @@ shutdownManager.register('hooks',            SHUTDOWN_ORDER.L2 + 10, async () =>
 
 ReviewPlugin.register(registry);
 AgentsPlugin.register(registry);
+
+// ---------------------------------------------------------------------------
+// LLM + Tool providers — these enable the real AgentLoop path in AgentSpawnerPlugin
+// ---------------------------------------------------------------------------
+if (!process.env.ANTHROPIC_API_KEY) {
+  console.error('[goodvibes-acp] WARNING: ANTHROPIC_API_KEY not set — agents will run in stub mode');
+} else {
+  const llmProvider = new AnthropicProvider(); // reads ANTHROPIC_API_KEY from .env
+  registry.register('llm-provider', llmProvider);
+  console.error('[goodvibes-acp] LLM provider registered: anthropic (claude)');
+}
+// Tool provider registered below after mcpToolProxy is created
+
 // Re-register the agent spawner with the McpToolCallBridge progress factory
 // so AgentLoop tool executions emit ACP tool_call updates in real time.
 registry.unregister('agent-spawner');
@@ -185,6 +200,8 @@ const serviceRegistry = new ServiceRegistry('.goodvibes', eventBus);
 // ---------------------------------------------------------------------------
 
 const mcpBridge = new McpBridge(eventBus);
+const mcpToolProxy = new McpToolProxy(mcpBridge);
+registry.register('tool-provider', mcpToolProxy);
 
 // ---------------------------------------------------------------------------
 // Daemon manager
