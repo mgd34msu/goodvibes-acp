@@ -24,12 +24,12 @@ interface AgentCommand extends acp.AvailableCommand {
 }
 
 /**
- * Spec-compliant available_commands session update payload.
- * The installed SDK spells the field `availableCommands`; the spec uses
- * `commands`. The cast in emitCommands() bridges the gap.
+ * SDK-aligned available_commands_update session update payload.
+ * The installed SDK uses `availableCommands` field and `available_commands_update`
+ * discriminator (AvailableCommandsUpdate type, types.gen.d.ts:2525-2526).
  */
 interface AvailableCommandsUpdateSpec {
-  commands: AgentCommand[];
+  availableCommands: AgentCommand[];
 }
 
 // ---------------------------------------------------------------------------
@@ -99,19 +99,19 @@ export class CommandsEmitter {
    * @param sessionId - ACP session ID
    */
   async emitCommands(sessionId: string): Promise<void> {
+    // ISS-063: Use SDK discriminator 'available_commands_update' and field
+    // 'availableCommands' (AvailableCommandsUpdate, types.gen.d.ts:2525-2526).
+    // The ACP spec prose uses 'available_commands' + 'commands' but the SDK
+    // is authoritative for wire format.
     const update: AvailableCommandsUpdateSpec = {
-      commands: GOODVIBES_COMMANDS,
+      availableCommands: GOODVIBES_COMMANDS,
     };
 
     await this.conn
       .sessionUpdate({
         sessionId,
-        // Cast required: the installed SDK types the discriminator as
-        // 'available_commands_update' and the field as `availableCommands`;
-        // the ACP spec uses 'available_commands' + `commands`. Cast bridges
-        // the version gap until the SDK catches up.
         update: {
-          sessionUpdate: 'available_commands',
+          sessionUpdate: 'available_commands_update',
           ...update,
         } as unknown as acp.SessionUpdate,
       })

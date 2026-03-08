@@ -76,17 +76,25 @@ export type RuntimeConfig = {
 export type SessionConfigOptionChoice = {
   /** Machine value */
   value: string;
-  /** Human-readable display label (ACP spec: `label?: string`) */
-  label?: string;
+  /**
+   * Human-readable display name (ACP spec: `name: string`).
+   * @remarks Required per KB-03 ConfigOptionValue spec; field renamed from `label` for SDK alignment.
+   */
+  name: string;
   /** Optional description */
   description?: string;
+  /** Optional extensibility metadata per KB-08 */
+  _meta?: Record<string, unknown>;
 };
 
 /**
  * Type of the config option control.
- * @remarks All three types are natively supported by the ACP spec (KB-01 line 301).
+ * @remarks The ACP spec (KB-03 line 258) defines only `"select"` as a valid config option type.
+ * The values `'boolean'` and `'text'` are not currently defined in the ACP protocol and
+ * must NOT be sent over the wire. Define a separate internal type if non-select variants
+ * are needed for internal use.
  */
-export type SessionConfigOptionType = 'select' | 'boolean' | 'text';
+export type SessionConfigOptionType = 'select';
 
 /**
  * An ACP-surfaced configuration option for a session.
@@ -101,7 +109,12 @@ export type SessionConfigOption = {
   category: string;
   /** Control type */
   type: SessionConfigOptionType;
-  /** Current value */
+  /**
+   * Current value of the config option.
+   * @remarks KB-01 (line 302) specifies `string | boolean`; KB-03 (line 266) specifies `string`.
+   * Since `SessionConfigOptionType` is restricted to `'select'` (per KB-03), only string
+   * values apply. If boolean type support is added in future, widen to `string | boolean`.
+   */
   currentValue: string;
   /** Available choices (for select type) */
   options?: SessionConfigOptionChoice[];

@@ -177,11 +177,12 @@ export class NormalizerRegistry {
  * });
  * ```
  */
-export function toAcpExtensionEvent(event: NormalizedEvent): Record<string, unknown> {
+export function toAcpExtensionEvent(event: NormalizedEvent, sessionId: string): Record<string, unknown> {
   // Returns only the params object — the `method` belongs in the JSON-RPC
   // envelope (as the first argument to sendNotification), NOT inside params.
-  // Callers should use: session.sendNotification('_goodvibes/events', toAcpExtensionEvent(event))
+  // Callers should use: session.sendNotification('_goodvibes/events', toAcpExtensionEvent(event, session.id))
   return {
+    sessionId,
     source: event.source,
     type: event.type,
     payload: event.payload,

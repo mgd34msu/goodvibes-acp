@@ -372,6 +372,13 @@ export class StateMachine<TState extends string, TContext> {
     data: SerializedStateMachine<TState, TContext>
   ): StateMachine<TState, TContext> {
     const machine = new StateMachine(config);
+    // Validate that data.current is a configured state to prevent invalid machine after config changes
+    const validStates = Object.keys(config.states) as TState[];
+    if (!validStates.includes(data.current)) {
+      throw new Error(
+        `StateMachine.restore(): state "${data.current}" not found in config. Valid states: ${validStates.join(', ')}`
+      );
+    }
     machine._current = data.current;
     machine._context = data.context;
     machine._history.push(...data.history);

@@ -111,7 +111,7 @@ export class WRFCEventBridge {
               toolCallId,
               WRFC_TOOL_NAMES.WORK,
               'Work phase starting…',
-              'other',
+              'execute',
               {
                 '_goodvibes/phase': 'work',
                 '_goodvibes/attempt': payload.attempt,
@@ -134,7 +134,7 @@ export class WRFCEventBridge {
               toolCallId,
               WRFC_TOOL_NAMES.REVIEW,
               'Review phase starting…',
-              'other',
+              'think',
               {
                 '_goodvibes/phase': 'review',
                 '_goodvibes/attempt': payload.attempt,
@@ -156,7 +156,7 @@ export class WRFCEventBridge {
               toolCallId,
               WRFC_TOOL_NAMES.FIX,
               'Fix phase starting…',
-              'other',
+              'edit',
               {
                 '_goodvibes/phase': 'fix',
                 '_goodvibes/attempt': payload.attempt,
@@ -179,11 +179,14 @@ export class WRFCEventBridge {
       this.eventBus.on<WorkCompletePayload>('wrfc:work-complete', (event) => {
         const p = event.payload as WorkCompletePayload;
         const toolCallId = this._toolCallId(p.workId, 'work');
+        const workContent: acp.ToolCallContent[] = [
+          { type: 'content', content: { type: 'text', text: `Work complete. Modified ${p.filesModified.length} file(s).` } },
+        ];
         this._emitter
           .emitToolCallUpdate(p.sessionId, toolCallId, 'completed', {
             '_goodvibes/phase': 'work',
             '_goodvibes/filesModified': p.filesModified.length,
-          })
+          }, workContent)
           .catch(() => {});
       }),
     );
@@ -194,12 +197,15 @@ export class WRFCEventBridge {
         const p = event.payload as ReviewCompletePayload;
         const toolCallId = this._toolCallId(p.workId, 'review');
         const status: acp.ToolCallStatus = p.passed ? 'completed' : 'failed';
+        const reviewContent: acp.ToolCallContent[] = [
+          { type: 'content', content: { type: 'text', text: `Review ${p.passed ? 'passed' : 'failed'}. Score: ${p.score}.` } },
+        ];
         this._emitter
           .emitToolCallUpdate(p.sessionId, toolCallId, status, {
             '_goodvibes/phase': 'review',
             '_goodvibes/score': p.score,
             '_goodvibes/passed': p.passed,
-          })
+          }, reviewContent)
           .catch(() => {});
       }),
     );
@@ -209,11 +215,14 @@ export class WRFCEventBridge {
       this.eventBus.on<FixCompletePayload>('wrfc:fix-complete', (event) => {
         const p = event.payload as FixCompletePayload;
         const toolCallId = this._toolCallId(p.workId, 'fix');
+        const fixContent: acp.ToolCallContent[] = [
+          { type: 'content', content: { type: 'text', text: `Fix complete. Resolved ${p.resolvedIssues.length} issue(s).` } },
+        ];
         this._emitter
           .emitToolCallUpdate(p.sessionId, toolCallId, 'completed', {
             '_goodvibes/phase': 'fix',
             '_goodvibes/resolvedIssues': p.resolvedIssues.length,
-          })
+          }, fixContent)
           .catch(() => {});
       }),
     );

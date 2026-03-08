@@ -126,8 +126,11 @@ export class McpToolCallBridge {
             toolCallId,
             'completed',
             { '_goodvibes/durationMs': event.durationMs },
-            // ISS-023: pass content blocks as the content parameter, not inside _meta
-            [{ type: 'content', content: { type: 'text', text: '' } }],
+            // Forward actual MCP tool result content to the ACP client (ISS-005/ISS-105).
+            // Converts the tool result data to a text content block for ACP visibility.
+            event.result != null
+              ? [{ type: 'content', content: { type: 'text', text: typeof event.result.data === 'string' ? event.result.data : JSON.stringify(event.result.data ?? '') } }]
+              : [],
           )
           .catch((err: unknown) => {
             console.error('[McpToolCallBridge] error:', err);

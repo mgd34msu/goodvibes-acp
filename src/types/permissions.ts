@@ -35,14 +35,25 @@ export type PermissionType =
 // ---------------------------------------------------------------------------
 
 /**
+ * Kind of permission option (controls grant duration/scope).
+ * Maps to the ACP SDK `PermissionOptionKind` type (KB-09).
+ */
+export type PermissionOptionKind = 'allow_once' | 'allow_always' | 'reject_once' | 'reject_always';
+
+/**
  * A selectable option presented to the user in an ACP permission request.
  * Maps to the ACP SDK `PermissionOption` type (KB-09 lines 147-165).
+ *
+ * @remarks The previous shape `{ id, label }` was incorrect. The SDK uses
+ * `{ optionId, kind, name }` — this type has been updated for SDK alignment.
  */
 export type PermissionOption = {
-  /** Option identifier (e.g. 'allow', 'deny', 'always_allow') */
-  id: string;
-  /** Human-readable label */
-  label: string;
+  /** Option identifier used to correlate the user's response */
+  optionId: string;
+  /** Determines grant duration/scope */
+  kind: PermissionOptionKind;
+  /** Human-readable label shown to the user */
+  name: string;
 };
 
 /**
@@ -57,7 +68,12 @@ export type PermissionOption = {
 export type PermissionRequest = {
   /** Categorizes the action (maps to ACP permission.type) */
   type: PermissionType;
-  /** ACP session identifier — required on the wire, optional for internal callers */
+  /**
+   * ACP session identifier.
+   * @remarks This field is IGNORED at runtime — `PermissionGate` always uses the
+   * `sessionId` injected via its constructor. The field is retained for interface
+   * completeness but callers should not rely on it being read.
+   */
   sessionId?: string;
   /** Optional: tool name when type is 'mcp' */
   toolName?: string;

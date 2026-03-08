@@ -107,7 +107,7 @@ export type AgentProgressEvent =
   | { type: 'llm_start'; turn: number }
   | { type: 'llm_complete'; turn: number; stopReason: string; usage: { inputTokens: number; outputTokens: number } }
   | { type: 'tool_start'; turn: number; toolName: string }
-  | { type: 'tool_complete'; turn: number; toolName: string; durationMs: number }
+  | { type: 'tool_complete'; turn: number; toolName: string; durationMs: number; result?: { data?: unknown; isError?: boolean } }
   | { type: 'tool_error'; turn: number; toolName: string; error: string };
 
 // ---------------------------------------------------------------------------

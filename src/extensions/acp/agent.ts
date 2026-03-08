@@ -316,18 +316,10 @@ export class GoodVibesAgent implements Agent {
       });
     }
 
-    // ISS-032: Emit config options as a session notification, then return null
-    await this.conn.sessionUpdate({
-      sessionId: params.sessionId,
-      update: {
-        sessionUpdate: 'config_option_update',
-        configOptions: buildConfigOptions(
-          modeFromConfigValue(context.config.mode),
-          context.config.model,
-        ),
-      } as schema.SessionUpdate,
-    });
-
+    // ISS-142: configOptions is returned in the response below; the prior
+    // duplicate sessionUpdate notification has been removed to avoid sending
+    // identical payloads to the client. The response carries config options
+    // and is always delivered, making the notification redundant.
     return {
       configOptions: buildConfigOptions(
         modeFromConfigValue(context.config.mode),
@@ -342,9 +334,11 @@ export class GoodVibesAgent implements Agent {
 
   /**
    * No-op — GoodVibes does not require authentication.
+   * ISS-065: Returns AuthenticateResponse ({}) rather than void to satisfy
+   * the SDK type contract and produce a well-formed JSON-RPC result.
    */
-  async authenticate(_params: schema.AuthenticateRequest): Promise<void> {
-    // No auth required
+  async authenticate(_params: schema.AuthenticateRequest): Promise<schema.AuthenticateResponse> {
+    return {};
   }
 
   // -------------------------------------------------------------------------

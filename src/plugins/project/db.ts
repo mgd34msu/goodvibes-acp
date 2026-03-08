@@ -8,6 +8,7 @@
 
 import { readFile } from 'node:fs/promises';
 import type { DbSchema, TableInfo, ColumnInfo, IndexInfo, Relation, SchemaAnalysis } from './types.js';
+import type { ITextFileAccess } from '../../types/registry.js';
 
 // ---------------------------------------------------------------------------
 // Prisma schema parser
@@ -18,15 +19,15 @@ import type { DbSchema, TableInfo, ColumnInfo, IndexInfo, Relation, SchemaAnalys
  * Handles model blocks, fields, relations, and @@index directives.
  * Returns an empty schema on parse errors.
  *
- * @note Uses direct `node:fs/promises` calls rather than the ITextFileAccess
- * abstraction used by DependencyAnalyzer, SecurityScanner, and TestAnalyzer.
- * This means DatabaseTools reads stale disk state instead of unsaved editor
- * buffers (ISS-051). To fix: add ITextFileAccess as a constructor parameter,
- * replace readFile() with this._fileAccess.readFile(), remove the fs/promises
- * import, and update the instantiation site in ProjectAnalyzer to inject the
- * shared ITextFileAccess instance.
+ * Accepts an optional {@link ITextFileAccess} for ACP-compliant reads (editor
+ * buffer aware). Falls back to `node:fs/promises` when no access is provided.
  */
 export class DatabaseTools {
+  private readonly _fs?: ITextFileAccess;
+
+  constructor(fs?: ITextFileAccess) {
+    this._fs = fs;
+  }
   /**
    * Parse a Prisma schema file into a DbSchema.
    * Never throws — returns empty schema on error.
@@ -34,7 +35,9 @@ export class DatabaseTools {
   async parsePrismaSchema(schemaPath: string): Promise<DbSchema> {
     let content: string;
     try {
-      content = await readFile(schemaPath, 'utf-8');
+      content = this._fs
+        ? await this._fs.readTextFile(schemaPath)
+        : await readFile(schemaPath, 'utf-8');
     } catch {
       return { tables: [], relations: [] };
     }

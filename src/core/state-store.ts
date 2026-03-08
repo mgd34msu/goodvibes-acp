@@ -232,11 +232,19 @@ export class StateStore {
    */
   restore(state: SerializedState): void {
     this._assertNotDestroyed();
+    // Validate schema version to prevent silent corruption from incompatible snapshots
+    if (state.$schema !== STATE_SCHEMA_VERSION) {
+      throw new Error(
+        `StateStore.restore(): incompatible schema version '${state.$schema}'. Expected '${STATE_SCHEMA_VERSION}'.`
+      );
+    }
     this._state.clear();
     for (const [ns, nsData] of Object.entries(state.namespaces)) {
       const nsMap = new Map<string, unknown>();
       for (const [key, value] of Object.entries(nsData)) {
         nsMap.set(key, value);
+        // Notify subscribers of restored values so observers stay consistent
+        this._notifyChange({ namespace: ns, key, oldValue: undefined, newValue: value });
       }
       this._state.set(ns, nsMap);
     }
@@ -258,8 +266,9 @@ export class StateStore {
     for (const listener of this._listeners) {
       try {
         listener(event);
-      } catch {
-        // Swallow errors from change listeners to protect store integrity
+      } catch (err: unknown) {
+        // Log listener errors but continue notifying remaining listeners
+        console.error('[StateStore] listener error:', err);
       }
     }
   }

@@ -199,7 +199,9 @@ export class AcpTerminal implements ITerminal {
       const exitPromise = internal.acpHandle.waitForExit().then(async (exitResult) => {
         const outputResult: schema.TerminalOutputResponse = await internal.acpHandle.currentOutput();
         return {
-          exitCode: exitResult.exitCode ?? 0,
+          // ISS-146: Use -1 as sentinel for null exit code (consistent with spawn path
+          // which stores code ?? -1 in the on-exit handler).
+          exitCode: exitResult.exitCode ?? -1,
           stdout: outputResult.output,
           stderr: '',
           durationMs: Date.now() - startedAt,

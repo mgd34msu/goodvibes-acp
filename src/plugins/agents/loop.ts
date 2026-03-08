@@ -61,6 +61,19 @@ export type { AgentProgressEvent } from '../../types/agent.js';
 // Result
 // ---------------------------------------------------------------------------
 
+/**
+ * ACP-defined stop reasons (KB-04 lines 446-460).
+ * These values are safe to send to clients on the wire.
+ */
+export type AcpStopReason = 'end_turn' | 'max_tokens' | 'max_turn_requests' | 'refusal' | 'cancelled';
+
+/**
+ * Internal stop reason type used by the agent loop.
+ * Extends AcpStopReason with 'error' for internal error reporting.
+ * 'error' is NEVER sent to clients — it is translated at the L2 ACP layer.
+ */
+export type InternalStopReason = AcpStopReason | 'error';
+
 export interface AgentLoopResult {
   /** Final text output from the agent */
   output: string;
@@ -68,14 +81,13 @@ export interface AgentLoopResult {
   turns: number;
   /** Total token usage */
   usage: { inputTokens: number; outputTokens: number };
-  /** How the loop ended */
   /**
    * How the loop ended.
    * Uses ACP-defined stop reason values (see KB-04 lines 446-460).
    * 'error' is an internal extension value — ACP has no error stop reason.
    * It is translated at the L2 ACP layer and never sent to clients directly.
    */
-  stopReason: 'end_turn' | 'max_turn_requests' | 'cancelled' | 'error';
+  stopReason: InternalStopReason;
   /** Error message if stopReason is 'error' */
   error?: string;
 }
@@ -167,9 +179,14 @@ export class AgentLoop {
         lastTextOutput = textBlocks.map(b => b.text).join('\n');
       }
 
-      // end_turn or max_tokens — agent is done
-      if (response.stopReason === 'end_turn' || response.stopReason === 'max_tokens') {
+      // end_turn — agent completed normally
+      if (response.stopReason === 'end_turn') {
         return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'end_turn' };
+      }
+
+      // max_tokens — response was truncated; propagate as distinct stop reason (KB-04)
+      if (response.stopReason === 'max_tokens') {
+        return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'max_tokens' };
       }
 
       // tool_use — execute tools and feed results back
@@ -251,7 +268,7 @@ export class AgentLoop {
 
         const result = await provider.execute(toolName, block.input);
         const durationMs = Date.now() - startTime;
-        this.config.onProgress?.({ type: 'tool_complete', turn, toolName: block.name, durationMs });
+        this.config.onProgress?.({ type: 'tool_complete', turn, toolName: block.name, durationMs, result: { data: result.data } });
 
         results.push({
           type: 'tool_result',

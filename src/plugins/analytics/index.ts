@@ -31,6 +31,9 @@ export type {
   AnalyticsStore,
 } from './types.js';
 
+/** Module-level engine reference held for shutdown flushing */
+let _engine: AnalyticsEngine | undefined;
+
 export const AnalyticsPlugin: PluginRegistration = {
   manifest: {
     name: 'analytics',
@@ -42,11 +45,11 @@ export const AnalyticsPlugin: PluginRegistration = {
   },
   register: (registry: unknown) => {
     const reg = registry as Registry;
-    reg.register('analytics', new AnalyticsEngine());
+    _engine = new AnalyticsEngine();
+    reg.register('analytics-engine', _engine);
   },
   shutdown: async () => {
-    // The engine instance is held only in the registry; graceful flush
-    // is called directly via AnalyticsEngine.shutdown() from main.ts
-    // if the consumer wires it up.
+    await _engine?.shutdown();
+    _engine = undefined;
   },
 };

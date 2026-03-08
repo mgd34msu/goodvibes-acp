@@ -139,8 +139,8 @@ function applyEnvOverrides(config: RuntimeConfig): RuntimeConfig {
     // Type coercion: try number, then boolean, then string
     let value: unknown = envValue;
     if (envValue !== undefined) {
-      if (/^\d+$/.test(envValue)) {
-        value = parseInt(envValue, 10);
+      if (/^-?\d+(\.\d+)?$/.test(envValue)) {
+        value = parseFloat(envValue);
       } else if (envValue === 'true') {
         value = true;
       } else if (envValue === 'false') {
@@ -310,6 +310,11 @@ export class Config {
     const maxAttempts = this.get<number>('wrfc.maxFixAttempts');
     if (maxAttempts !== undefined && (typeof maxAttempts !== 'number' || maxAttempts < 1)) {
       errors.push(`wrfc.maxFixAttempts must be a positive number`);
+    }
+    const logLevel = this.get<string>('logging.level');
+    const validLogLevels = ['debug', 'info', 'warn', 'error', 'silent'];
+    if (logLevel !== undefined && !validLogLevels.includes(logLevel)) {
+      errors.push(`logging.level must be one of ${validLogLevels.join(', ')}, got '${logLevel}'`);
     }
     return { valid: errors.length === 0, errors };
   }

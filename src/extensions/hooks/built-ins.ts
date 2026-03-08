@@ -13,7 +13,7 @@ import type { EventBus } from '../../core/event-bus.js';
 
 /**
  * Typed context object passed to all built-in hook handlers.
- * Extensible via the index signature while keeping well-known fields typed.
+ * All known dynamic fields are explicitly typed. Custom data should be placed in `_meta`.
  */
 export interface HookContext {
   event: string;
@@ -25,7 +25,20 @@ export interface HookContext {
    * should be stored here rather than at the root of the context object.
    */
   _meta?: Record<string, unknown>;
-  [key: string]: unknown;
+  /** Agent type for agent:spawn hooks */
+  type?: string;
+  /** Task description for agent:spawn hooks */
+  task?: string;
+  /** Execution mode for agent:spawn hooks */
+  mode?: string;
+  /** Permission policy for agent:spawn hooks */
+  permissionPolicy?: unknown;
+  /** Tool name for tool:execute hooks */
+  toolName?: string;
+  /** Tool call ID for tool:execute hooks */
+  toolCallId?: string;
+  /** Permission type for tool:execute hooks */
+  permissionType?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -41,13 +54,12 @@ export function validateAgentConfig(
 ): { proceed: boolean; reason?: string } {
   const required = ['type', 'task', 'sessionId'] as const;
   for (const field of required) {
-    if (context[field] === undefined || context[field] === null) {
+    if ((context as unknown as Record<string, unknown>)[field] === undefined || (context as unknown as Record<string, unknown>)[field] === null) {
       return { proceed: false, reason: `Missing required field: ${field}` };
     }
   }
-  const config = context as Record<string, unknown>;
-  if (!config['mode'] && !config['permissionPolicy']) {
-    console.error('[Hooks] Warning: Agent spawned without permission context');
+  if (!context.mode && !context.permissionPolicy) {
+    console.warn('[Hooks] Warning: Agent spawned without permission context');
   }
   return { proceed: true };
 }

@@ -31,6 +31,8 @@ export type Directive = {
   id: string;
   /** The action to take */
   action: DirectiveAction;
+  /** ACP session ID this directive is scoped to — required for per-session isolation and cancellation */
+  sessionId: string;
   /** Work ID this directive relates to (WRFC chain ID). Matches WRFCContext.workId. */
   workId: string;
   /** Target agent type or session component */
@@ -72,6 +74,8 @@ export type DirectiveResult = {
 export type DirectiveFilter = {
   /** Filter by action type */
   action?: DirectiveAction;
+  /** Filter by session ID — enables per-session isolation */
+  sessionId?: string;
   /** Filter by work ID */
   workId?: string;
   /** Filter by target */

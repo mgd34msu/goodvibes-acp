@@ -269,5 +269,5 @@ export type AcpSessionUpdateType =
   | 'session_info'
   | 'available_commands'
   | 'current_mode'
-  | 'config_options_update'
+  | 'config_option'
   | 'finish';

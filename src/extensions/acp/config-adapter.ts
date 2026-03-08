@@ -6,13 +6,24 @@
  * responses and SetSessionConfigOption responses.
  */
 
+import type { AgentSideConnection } from '@agentclientprotocol/sdk';
 import type * as schema from '@agentclientprotocol/sdk';
 
 // ---------------------------------------------------------------------------
 // GoodVibes mode type
 // ---------------------------------------------------------------------------
 
-/** GoodVibes operating modes surfaced as an ACP config option */
+/**
+ * GoodVibes operating modes surfaced as an ACP config option.
+ *
+ * - `justvibes`  — standard mode with full guardrails (default)
+ * - `vibecoding` — relaxed mode optimized for rapid prototyping
+ * - `sandbox`    — isolated, unrestricted experimentation mode
+ * - `plan`       — plan-and-approve mode; agent proposes actions before
+ *                  executing them, giving the user explicit control over
+ *                  each step. ISS-147: this mode is an implementation
+ *                  extension beyond the three modes referenced in KB-10.
+ */
 export type GoodVibesMode = 'justvibes' | 'vibecoding' | 'sandbox' | 'plan';
 
 // ---------------------------------------------------------------------------
@@ -123,6 +134,36 @@ export function modeFromConfigValue(value: string): GoodVibesMode {
     default:
       return 'justvibes';
   }
+}
+
+// ---------------------------------------------------------------------------
+// emitConfigUpdate
+// ---------------------------------------------------------------------------
+
+/**
+ * Emit an agent-initiated config update notification to the client.
+ *
+ * ISS-091: KB-10 (Implementation Guide) designates this function as part
+ * of the config adapter layer. Emits a `config_option_update` sessionUpdate
+ * so clients observe config changes triggered by the agent (e.g. mode
+ * changes applied via setSessionConfigOption).
+ *
+ * @param conn      - Active AgentSideConnection to emit through
+ * @param sessionId - Target session ID
+ * @param options   - Config options to send (use buildConfigOptions())
+ */
+export async function emitConfigUpdate(
+  conn: AgentSideConnection,
+  sessionId: string,
+  options: schema.SessionConfigOption[],
+): Promise<void> {
+  await conn.sessionUpdate({
+    sessionId,
+    update: {
+      sessionUpdate: 'config_option_update',
+      configOptions: options,
+    } as schema.SessionUpdate,
+  });
 }
 
 // ---------------------------------------------------------------------------

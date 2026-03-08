@@ -7,4 +7,4 @@
  */
 
 export { HookRegistrar } from './registrar.js';
-export * from './built-ins.js';
+export { validateAgentConfig, emitAgentSpawned, emitWrfcReviewScore, emitWrfcCompleted, emitSessionCreated, emitSessionDestroyed } from './built-ins.js';

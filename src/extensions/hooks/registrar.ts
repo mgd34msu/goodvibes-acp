@@ -57,14 +57,14 @@ export class HookRegistrar {
     const { _hookEngine: engine, _eventBus: bus, _permissionGate: permissionGate } = this;
 
     // agent:spawn — pre: validate config
-    // ISS-070: Sets _meta._abort: true and _meta._validationError on invalid configs.
+    // ISS-070: Sets _meta['_goodvibes/abort']: true and _meta['_goodvibes/validationError'] on invalid configs.
     // Callers that invoke engine.execute('agent:spawn', ...) should check the returned
-    // context for _meta._abort === true and abort the operation before proceeding.
+    // context for _meta['_goodvibes/abort'] === true and abort the operation before proceeding.
     engine.register(
       'agent:spawn',
       'pre',
       (context: Record<string, unknown>) => {
-        const validation = validateAgentConfig(context as HookContext);
+        const validation = validateAgentConfig(context as unknown as HookContext);
         if (!validation.proceed) {
           // Store under _meta (ISS-019) and signal abort for callers to check (ISS-070)
           const existingMeta = (context._meta as Record<string, unknown> | undefined) ?? {};
@@ -72,8 +72,8 @@ export class HookRegistrar {
             ...context,
             _meta: {
               ...existingMeta,
-              _validationError: validation.reason,
-              _abort: true,
+              '_goodvibes/validationError': validation.reason,
+              '_goodvibes/abort': true,
             },
           };
         }
@@ -86,7 +86,7 @@ export class HookRegistrar {
       'agent:spawn',
       'post',
       (context: Record<string, unknown>) => {
-        emitAgentSpawned(bus, context as HookContext);
+        emitAgentSpawned(bus, context as unknown as HookContext);
       }
     );
 
@@ -95,7 +95,7 @@ export class HookRegistrar {
       'wrfc:review',
       'post',
       (context: Record<string, unknown>, result: unknown) => {
-        emitWrfcReviewScore(bus, context as HookContext, result);
+        emitWrfcReviewScore(bus, context as unknown as HookContext, result);
       }
     );
 
@@ -104,7 +104,7 @@ export class HookRegistrar {
       'wrfc:complete',
       'post',
       (context: Record<string, unknown>) => {
-        emitWrfcCompleted(bus, context as HookContext);
+        emitWrfcCompleted(bus, context as unknown as HookContext);
       }
     );
 
@@ -113,7 +113,7 @@ export class HookRegistrar {
       'session:create',
       'post',
       (context: Record<string, unknown>) => {
-        emitSessionCreated(bus, context as HookContext);
+        emitSessionCreated(bus, context as unknown as HookContext);
       }
     );
 
@@ -122,14 +122,14 @@ export class HookRegistrar {
       'session:destroy',
       'post',
       (context: Record<string, unknown>) => {
-        emitSessionDestroyed(bus, context as HookContext);
+        emitSessionDestroyed(bus, context as unknown as HookContext);
       }
     );
 
     // tool:execute — pre: permission check (ISS-018, ISS-021)
     // Calls PermissionGate.check() when a gate is wired in. If permission is denied,
-    // sets _meta._permissionDenied: true on the context. Callers should check this
-    // flag and abort the tool call, emitting tool_call_update(status: 'failed').
+    // sets _meta['_goodvibes/permissionDenied']: true on the context. Callers should check
+    // this flag and abort the tool call, emitting tool_call_update(status: 'error').
     engine.register(
       'tool:execute',
       'pre',
@@ -139,7 +139,16 @@ export class HookRegistrar {
           // Build a PermissionRequest from the hook context
           const toolName = (context.toolName as string | undefined) ?? 'unknown';
           const permResult = await permissionGate.check({
-            type: (context.permissionType as string | undefined) ?? 'mcp',
+            type: (() => {
+            const pt = context.permissionType as string | undefined;
+            if (!pt) {
+              const tn = (context.toolName as string | undefined) ?? 'unknown';
+              console.warn(
+                `[HookRegistrar] tool:execute pre-hook: permissionType not set for tool '${tn}', defaulting to 'mcp'`
+              );
+            }
+            return pt ?? 'mcp';
+          })(),
             toolCallId: context.toolCallId as string | undefined,
             toolName,
             title: `Execute tool: ${toolName}`,
@@ -155,14 +164,14 @@ export class HookRegistrar {
               ...context,
               _meta: {
                 ...existingMeta,
-                _permissionDenied: true,
-                _permissionReason: permResult.reason,
+                '_goodvibes/permissionDenied': true,
+                '_goodvibes/permissionReason': permResult.reason,
               },
             };
           }
           return {
             ...context,
-            _meta: { ...existingMeta, _permissionChecked: true },
+            _meta: { ...existingMeta, '_goodvibes/permissionChecked': true },
           };
         }
         // No permission gate wired — log advisory and pass through
@@ -172,7 +181,7 @@ export class HookRegistrar {
         );
         return {
           ...context,
-          _meta: { ...existingMeta, _permissionChecked: false, _permissionGateMissing: true },
+          _meta: { ...existingMeta, '_goodvibes/permissionChecked': false, '_goodvibes/permissionGateMissing': true },
         };
       },
       100
@@ -188,13 +197,17 @@ export class HookRegistrar {
         const toolCallId = context.toolCallId as string | undefined;
         const toolName = (context.toolName as string | undefined) ?? 'unknown';
         const meta = (context._meta as Record<string, unknown> | undefined) ?? {};
-        const failed = Boolean(meta._permissionDenied);
+        const failed = Boolean(meta['_goodvibes/permissionDenied']);
+        const permissionReason = meta['_goodvibes/permissionReason'] as string | undefined;
         bus.emit('tool:call:update', {
           toolCallId,
           toolName,
-          status: failed ? 'failed' : 'completed',
-          output: result ?? null,
-          reason: failed ? (meta._permissionReason as string | undefined) : undefined,
+          status: failed ? 'error' : 'completed',
+          content: failed
+            ? [{ type: 'text', text: `Permission denied${permissionReason ? `: ${permissionReason}` : ''}` }]
+            : (result !== null && result !== undefined ? [{ type: 'text', text: String(result) }] : undefined),
+          rawOutput: result ?? null,
+          _meta: failed ? { '_goodvibes/permissionReason': permissionReason } : undefined,
         });
       },
       100

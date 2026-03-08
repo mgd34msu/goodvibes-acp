@@ -15,7 +15,8 @@ import type {
   HistoryMessage,
   MCPServerConfig,
 } from '../../types/session.js';
-import type { SessionConfigOption } from '../../types/config.js';
+import type * as schema from '@agentclientprotocol/sdk';
+import { buildConfigOptions, modeFromConfigValue } from '../acp/config-adapter.js';
 import { StateStore } from '../../core/state-store.js';
 import { EventBus } from '../../core/event-bus.js';
 
@@ -30,6 +31,18 @@ type StoredContext = Omit<SessionContext, 'history'>;
 const NS = 'sessions';
 // Key prefix for history entries
 const HISTORY_PREFIX = 'history:';
+
+// ---------------------------------------------------------------------------
+// State transition table
+// ---------------------------------------------------------------------------
+
+/** Permitted lifecycle transitions per state */
+const ALLOWED_TRANSITIONS: Readonly<Record<SessionState, SessionState[]>> = {
+  idle: ['active'],
+  active: ['idle', 'cancelled', 'completed'],
+  cancelled: [],
+  completed: [],
+};
 
 // ---------------------------------------------------------------------------
 // SessionManager
@@ -189,11 +202,21 @@ export class SessionManager {
 
   /**
    * Update the lifecycle state of a session.
+   * Validates that the transition is permitted before applying.
    * Emits `session:state-changed`.
+   *
+   * @throws {Error} if the transition from the current state to `state` is not allowed
    */
   async setState(sessionId: string, state: SessionState): Promise<void> {
     const stored = this._requireStored(sessionId);
     const from = stored.state;
+
+    const allowed = ALLOWED_TRANSITIONS[from];
+    if (!allowed.includes(state)) {
+      throw new Error(
+        `Invalid session state transition: '${from}' → '${state}'. Allowed: [${allowed.join(', ') || 'none'}]`,
+      );
+    }
 
     const updated: StoredContext = { ...stored, state, updatedAt: Date.now() };
     this._store.set(NS, sessionId, updated);
@@ -270,7 +293,7 @@ export class SessionManager {
     sessionId: string,
     key: string,
     value: string,
-  ): Promise<SessionConfigOption[]> {
+  ): Promise<schema.SessionConfigOption[]> {
     const stored = this._requireStored(sessionId);
 
     const updatedOptions: Record<string, string> = {
@@ -290,19 +313,12 @@ export class SessionManager {
 
     this._bus.emit('session:config-changed', { sessionId, key, value });
 
-    // Build the full ConfigOption[] wire format from the flat key-value store.
-    // The agent layer's buildConfigOptions() in config-adapter.ts has richer
-    // metadata (names, choices); this returns a minimal representation for
-    // the ACP SetSessionConfigOption response (spec: configOptions array with
-    // id + currentValue per option).
-    return Object.entries(updatedOptions).map(([id, currentValue]) => ({
-      id,
-      name: id,
-      category: 'session',
-      type: 'text' as const,
-      currentValue,
-      options: [],
-    }));
+    // Build the full ConfigOption[] wire format using the canonical builder.
+    // This returns the complete set of config options (mode + model) with full
+    // metadata (names, choices, categories) as required by the ACP spec.
+    const currentMode = modeFromConfigValue(updatedOptions['mode'] ?? stored.config.mode);
+    const currentModel = updatedOptions['model'] ?? stored.config.model;
+    return buildConfigOptions(currentMode, currentModel);
   }
 
   // -------------------------------------------------------------------------

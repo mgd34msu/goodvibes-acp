@@ -10,6 +10,27 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { SessionAnalytics, AnalyticsStore } from './types.js';
 
+/** Validate that a parsed JSON object has the required SessionAnalytics shape */
+function validateSessionAnalytics(data: unknown): SessionAnalytics {
+  if (!data || typeof data !== 'object') {
+    throw new Error('Invalid session analytics: not an object');
+  }
+  const d = data as Record<string, unknown>;
+  if (typeof d['sessionId'] !== 'string') {
+    throw new Error('Invalid session analytics: missing or invalid sessionId');
+  }
+  if (typeof d['startedAt'] !== 'number') {
+    throw new Error('Invalid session analytics: missing or invalid startedAt');
+  }
+  if (!Array.isArray(d['entries'])) {
+    throw new Error('Invalid session analytics: entries must be an array');
+  }
+  if (typeof d['totalTokensIn'] !== 'number' || typeof d['totalTokensOut'] !== 'number') {
+    throw new Error('Invalid session analytics: missing or invalid token totals');
+  }
+  return d as unknown as SessionAnalytics;
+}
+
 const DEFAULT_STORAGE_DIR = '.goodvibes/analytics';
 
 /** Persists and loads session analytics from disk */
@@ -45,10 +66,15 @@ export class SessionSync {
     const filePath = this._sessionPath(sessionId);
     try {
       const raw = await readFile(filePath, 'utf-8');
-      // NOTE: JSON.parse result is cast to SessionAnalytics without runtime validation.
-      // Callers should treat the returned object as untrusted if the storage file
-      // may have been written by an external process or an older schema version.
-      const session = JSON.parse(raw) as SessionAnalytics;
+      let session: SessionAnalytics;
+      try {
+        session = validateSessionAnalytics(JSON.parse(raw));
+      } catch (validationErr) {
+        // Corrupted or schema-mismatched file — log warning and skip
+        const msg = validationErr instanceof Error ? validationErr.message : String(validationErr);
+        console.warn(`[SessionSync] Skipping corrupted analytics file '${filePath}': ${msg}`);
+        return null;
+      }
       this._store.sessions.set(sessionId, session);
       return session;
     } catch (err: unknown) {

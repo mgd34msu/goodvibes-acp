@@ -145,11 +145,20 @@ export class DaemonManager {
       await writeFile(options.pidFile, String(process.pid), 'utf-8');
     }
 
-    // Start TCP listener for ACP connections
-    await this._startTcpServer(host, options.port);
+    // Start TCP and health servers; clean up PID file on failure (ISS-031)
+    try {
+      // Start TCP listener for ACP connections
+      await this._startTcpServer(host, options.port);
 
-    // Start HTTP health / readiness server
-    await this._startHealthServer(host, healthPort);
+      // Start HTTP health / readiness server
+      await this._startHealthServer(host, healthPort);
+    } catch (err) {
+      // If either server fails to bind, remove the PID file to prevent orphans
+      if (options.pidFile) {
+        await unlink(options.pidFile).catch(() => {});
+      }
+      throw err;
+    }
 
     this._running = true;
 

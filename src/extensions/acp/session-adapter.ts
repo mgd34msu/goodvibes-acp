@@ -90,14 +90,11 @@ export class SessionAdapter {
       ),
     ];
 
-    // TODO(ISS-056): Implement session history replay on session/load.
-    // When handling a `session/load` request, the adapter MUST:
-    //   1. Retrieve stored conversation history via sessions.get(sessionId)
-    //   2. Iterate through each HistoryMessage in context.history
-    //   3. Emit session/update notifications: user messages as `user_message_chunk`,
-    //      agent messages as `agent_message_chunk`, tool interactions as `tool_call`/`tool_call_update`
-    //   4. Only send the session/load response (result: null) after all history is replayed
-    // Requires hooking into the transport layer to intercept session/load before the response is sent.
+    // NOTE(ISS-008/ISS-108): History replay on session/load is implemented in
+    // GoodVibesAgent.loadSession() (agent.ts), which iterates over the session
+    // history and emits user_message_chunk / agent_message_chunk notifications
+    // before returning the LoadSessionResponse. The SessionAdapter does not
+    // need to duplicate this logic.
   }
 
   // -------------------------------------------------------------------------
@@ -169,12 +166,25 @@ export class SessionAdapter {
   }): Promise<void> {
     const { sessionId, to } = payload;
 
-    const update: schema.SessionUpdate = {
+    // Primary notification: current_mode_update (SDK discriminator)
+    const modeUpdate: schema.SessionUpdate = {
       sessionUpdate: 'current_mode_update' as const,
       currentModeId: to,
     };
+    await this._safeSessionUpdate(sessionId, modeUpdate);
 
-    await this._safeSessionUpdate(sessionId, update);
+    // ISS-069: KB-03 SHOULD — emit dual config_option_update for backwards
+    // compatibility so clients relying on config_option_update also see the change.
+    const context = await this.sessions.get(sessionId).catch(() => undefined);
+    if (context) {
+      const { configOptions: storedOptions, model } = context.config;
+      const currentModel = storedOptions?.['model'] ?? model ?? 'claude-sonnet-4-6';
+      const configUpdate: schema.SessionUpdate = {
+        sessionUpdate: 'config_option_update' as const,
+        configOptions: buildConfigOptions(modeFromConfigValue(to), currentModel),
+      };
+      await this._safeSessionUpdate(sessionId, configUpdate);
+    }
   }
 
   private async _onSessionConfigChanged(payload: {

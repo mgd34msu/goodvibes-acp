@@ -202,9 +202,6 @@ export class TriggerEngine {
         continue;
       }
 
-      // Increment fire count
-      state.fireCount++;
-
       // Look up handler
       const handler = this._registry.getOptional<ITriggerHandler>(definition.handlerKey);
       if (!handler) {
@@ -216,6 +213,9 @@ export class TriggerEngine {
       if (!handler.canHandle(definition)) {
         continue;
       }
+
+      // Increment fire count only after handler validation to avoid premature exhaustion
+      state.fireCount++;
 
       // Execute handler with error isolation
       const context: TriggerContext = {

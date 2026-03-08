@@ -55,6 +55,9 @@ export { Config } from './config.js';
 export { Registry } from './registry.js';
 
 // Trigger engine
+// Note: TriggerDefinition, TriggerContext (L0), and ITriggerHandler (L0) are re-exported here
+// as a convenience so consumers can import everything trigger-related from 'src/core' without
+// also importing directly from 'src/types'. L1 may depend on L0; this is intentional.
 export type { TriggerDefinition, TriggerContext } from '../types/trigger.js';
 export type { ITriggerHandler } from '../types/registry.js';
 export type { TriggerDefinitionWithCondition } from './trigger-engine.js';

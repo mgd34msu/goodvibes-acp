@@ -49,8 +49,10 @@ export const MODE_POLICIES: Record<string, PermissionPolicy> = {
     promptForUnknown: true,
   },
   plan: {
-    // Auto-approve writes but not deletes — preserves granularity from spec
-    autoApprove: ['file_write'],
+    // ISS-098: Ask mode requires prompting for every gated action (KB-05).
+    // file_write was previously auto-approved here, but that violates ACP ask-mode semantics
+    // which require every gated action to prompt the user. Removed from autoApprove.
+    autoApprove: [],
     alwaysDeny: ['shell', 'file_delete'],
     promptForUnknown: true,
   },
@@ -85,27 +87,66 @@ function buildPermissionOptions(): acp.PermissionOption[] {
 }
 
 /**
- * Interpret an ACP RequestPermissionOutcome as a simple granted flag.
+ * Interpret an ACP permission response as a simple granted flag.
  *
- * SDK divergence note (ISS-014): The ACP wire spec uses simple `{ granted: boolean }`
- * responses, but the SDK (v0.15.0) requires an options-based model with
- * `PermissionOption[]` and outcome-based responses. These helper functions bridge
- * that gap. If the SDK aligns with the wire spec in a future version, these
- * functions can be removed in favor of a direct `response.granted` boolean check.
+ * ISS-003/ISS-103 — Version-aware response parser:
+ * The ACP wire spec defines the response as `{ granted: boolean }` (KB-05 lines 43-65).
+ * The SDK (v0.15.0) instead returns `{ outcome: { outcome, optionId } }`.
+ * This function checks for the spec path first so it works when the SDK aligns.
  *
- * Granted when:
+ * Granted when (SDK path):
  * - outcome is 'selected' AND the selected optionId has kind allow_once or allow_always
  *
- * Denied when:
+ * Denied when (SDK path):
  * - outcome is 'cancelled'
  * - outcome is 'selected' AND the selected optionId has kind reject_once or reject_always
  */
-function isGranted(outcome: acp.RequestPermissionOutcome): boolean {
+function isGranted(response: unknown): boolean {
+  // Spec path: { granted: boolean } — check this first for forward compatibility
+  if (response !== null && typeof response === 'object' && 'granted' in response) {
+    return Boolean((response as { granted: unknown }).granted);
+  }
+  // SDK fallback path: { outcome: { outcome, optionId } }
+  const outcome = (response as acp.RequestPermissionOutcome | undefined);
+  if (!outcome) return false;
   if (outcome.outcome === 'cancelled') {
     return false;
   }
   // outcome === 'selected' — check which option was picked
   return outcome.optionId === OPTION_ALLOW_ONCE || outcome.optionId.startsWith('allow');
+}
+
+/**
+ * Build the SDK-format permission request payload.
+ *
+ * ISS-002/ISS-097/ISS-102 — Abstraction layer for spec/SDK divergence:
+ * The ACP wire spec defines `session/request_permission` as:
+ *   `{ sessionId, permission: { type, title, description } }`
+ * The SDK (v0.15.0) uses:
+ *   `{ sessionId, options: PermissionOption[], toolCall: { toolCallId, title, description, ... } }`
+ *
+ * This function centralises the SDK format construction. When the SDK aligns with the wire
+ * spec, replace the return value with:
+ *   `{ sessionId, permission: { type: request.type, title: request.title, description: request.description } }`
+ *
+ * @spec-divergence ISS-013/ISS-017 — SDK v0.15.0 uses options-based model, not spec wire format.
+ */
+function buildPermissionRequest(
+  sessionId: string,
+  request: PermissionRequest,
+  toolCallId: string,
+): Parameters<acp.AgentSideConnection['requestPermission']>[0] {
+  return {
+    sessionId,
+    options: buildPermissionOptions(),
+    toolCall: {
+      toolCallId,
+      title: request.title,
+      status: 'pending',
+      rawInput: request._meta?.rawInput ?? null,
+      ...(request._meta ? { _meta: request._meta } : {}),
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -167,23 +208,26 @@ export class PermissionGate {
     // TypeScript interface we compile against. When the SDK aligns with the wire spec,
     // this code should be simplified to use the boolean response directly.
     try {
-      const toolCallId = request.toolCallId ?? randomUUID();
-      // ISS-017: ACP wire spec expects permission: { type, title, description }.
-      // SDK v0.15.0 uses options: PermissionOption[], toolCall instead (documented divergence).
-      // When the SDK aligns with the wire spec, replace this with:
-      //   permission: { type: request.type, title: request.title, description: request.description }
-      const response = await this.conn.requestPermission({
-        sessionId: this.sessionId,
-        options: buildPermissionOptions(),
-        toolCall: {
+      // ISS-017: toolCallId must match the preceding tool_call update for client UI correlation.
+      // If absent, fall back to a random UUID but emit a warning so this is visible during development.
+      let toolCallId = request.toolCallId;
+      if (toolCallId === undefined) {
+        toolCallId = randomUUID();
+        console.warn(
+          '[permission-gate] ISS-017: toolCallId missing on PermissionRequest — generated random UUID %s. ' +
+          'This breaks ACP client UI correlation between tool calls and their permission gates.',
           toolCallId,
-          title: request.title,
-          status: 'pending',
-          rawInput: request._meta?.rawInput ?? null,
-          ...(request._meta ? { _meta: request._meta } : {}),
-        },
-      });
-      const granted = isGranted(response.outcome);
+        );
+      }
+      // ISS-002/ISS-102: ACP wire spec expects permission: { type, title, description }.
+      // SDK v0.15.0 uses options: PermissionOption[], toolCall instead (documented divergence).
+      // buildPermissionRequest() below encapsulates the SDK format; when the SDK aligns with
+      // the wire spec it can be replaced with: permission: { type, title, description }.
+      const sdkRequest = buildPermissionRequest(this.sessionId, request, toolCallId);
+      const response = await this.conn.requestPermission(sdkRequest);
+      // ISS-003/ISS-103: spec response is { granted: boolean }; SDK returns { outcome: {...} }.
+      // isGranted() checks both shapes for forward compatibility.
+      const granted = isGranted(response);
       return {
         granted,
         ...(granted ? {} : { reason: 'Permission denied by user' }),

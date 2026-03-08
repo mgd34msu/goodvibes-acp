@@ -54,6 +54,9 @@ function buildPredicate(
     if (filter.workId !== undefined && directive.workId !== filter.workId) {
       return false;
     }
+    if (filter.sessionId !== undefined && directive.sessionId !== filter.sessionId) {
+      return false;
+    }
     if (filter.target !== undefined && directive.target !== filter.target) {
       return false;
     }
@@ -224,7 +227,10 @@ export class DirectiveQueue {
   async process(
     handler: (directive: Directive) => Promise<DirectiveResult>,
   ): Promise<DirectiveResult[]> {
-    if (this._processing) return []; // prevent reentrancy
+    if (this._processing) {
+      console.warn('[DirectiveQueue] process() skipped — already processing (reentrancy guard)');
+      return []; // prevent reentrancy
+    }
     this._processing = true;
     const results: DirectiveResult[] = [];
 

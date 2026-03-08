@@ -471,12 +471,22 @@ if (mode === 'daemon') {
     process.env.GOODVIBES_DAEMON_PORT ?? getArgValue('--port') ?? '9000',
     10,
   );
+  if (Number.isNaN(daemonPort) || daemonPort < 1 || daemonPort > 65535) {
+    throw new Error(
+      `[goodvibes-acp] Invalid daemon port: "${process.env.GOODVIBES_DAEMON_PORT ?? getArgValue('--port') ?? '9000'}" — must be an integer between 1 and 65535`,
+    );
+  }
   const daemonHost =
     process.env.GOODVIBES_DAEMON_HOST ?? getArgValue('--host') ?? '127.0.0.1';
   const daemonHealthPort = parseInt(
     process.env.GOODVIBES_DAEMON_HEALTH_PORT ?? getArgValue('--health-port') ?? String(daemonPort + 1),
     10,
   );
+  if (Number.isNaN(daemonHealthPort) || daemonHealthPort < 1 || daemonHealthPort > 65535) {
+    throw new Error(
+      `[goodvibes-acp] Invalid daemon health port: "${process.env.GOODVIBES_DAEMON_HEALTH_PORT ?? getArgValue('--health-port') ?? String(daemonPort + 1)}" — must be an integer between 1 and 65535`,
+    );
+  }
   const daemonPidFile =
     process.env.GOODVIBES_DAEMON_PID_FILE ?? getArgValue('--pid-file');
 

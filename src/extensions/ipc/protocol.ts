@@ -35,8 +35,8 @@ export interface IpcMessage {
   type: string;
   /** Unique message identifier (monotonic counter or cuid) */
   id: string;
-  /** Optional metadata (e.g. timestamp) */
-  _meta?: { timestamp?: number };
+  /** Optional metadata bag (e.g. timestamp, W3C trace context) */
+  _meta?: Record<string, unknown> & { timestamp?: number };
 }
 
 /** An IPC request — expects a correlated IpcResponse */

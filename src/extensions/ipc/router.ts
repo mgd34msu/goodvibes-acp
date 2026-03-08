@@ -113,7 +113,7 @@ export class IpcRouter {
       pid: process.pid,
       uptime: process.uptime(),
       memoryUsage: process.memoryUsage(),
-      handlerCount: this._eventBus.handlerCount,
+      handlerCount: this._eventBus?.handlerCount ?? 0,
     }));
   }
 }

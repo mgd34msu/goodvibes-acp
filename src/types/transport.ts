@@ -133,6 +133,9 @@ export type ResponseMessage = JsonRpcBase & {
 /**
  * Discriminated union of all JSON-RPC 2.0 message types used on the ACP wire.
  * Narrow to a specific type via the `method` and `id` fields.
+ *
+ * @deprecated Use `AnyMessage` instead. This alias is identical to `AnyMessage` and will be
+ * removed in the next major version. The ACP SDK favors `AnyMessage` as the canonical name.
  */
 export type Message = RequestMessage | ResponseMessage | NotificationMessage;
 

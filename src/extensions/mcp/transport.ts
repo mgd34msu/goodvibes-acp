@@ -97,7 +97,9 @@ export class McpClient extends EventEmitter {
           }
         }
       } catch {
-        // Ignore non-JSON lines (server stderr noise on stdout is unusual but safe to ignore)
+        // Ignore non-JSON lines (server stderr noise on stdout is unusual but safe to ignore).
+        // Log at debug level so persistent parse failures are visible for diagnostics (ISS-075).
+        console.debug('[McpClient] ignoring non-JSON line:', trimmed.substring(0, 100));
       }
     });
 

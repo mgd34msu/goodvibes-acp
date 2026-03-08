@@ -25,61 +25,61 @@ type SecretPattern = {
 const SECRET_PATTERNS: SecretPattern[] = [
   {
     name: 'AWS Access Key',
-    pattern: /AKIA[0-9A-Z]{16}/g,
+    pattern: /AKIA[0-9A-Z]{16}/,
     severity: 'critical',
     fix: 'Remove the AWS access key and rotate credentials immediately.',
   },
   {
     name: 'AWS Secret Key',
-    pattern: /aws_secret_access_key\s*=\s*['"]?[A-Za-z0-9/+=]{40}['"]?/gi,
+    pattern: /aws_secret_access_key\s*=\s*['"]?[A-Za-z0-9/+=]{40}['"]?/i,
     severity: 'critical',
     fix: 'Remove the AWS secret key and rotate credentials immediately.',
   },
   {
     name: 'GitHub Token',
-    pattern: /ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82}/g,
+    pattern: /ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82}/,
     severity: 'critical',
     fix: 'Revoke the GitHub token and generate a new one.',
   },
   {
     name: 'Generic API Key',
-    pattern: /(?:api[_-]?key|apikey)\s*[=:]\s*['"]?[A-Za-z0-9_\-]{20,}['"]?/gi,
+    pattern: /(?:api[_-]?key|apikey)\s*[=:]\s*['"]?[A-Za-z0-9_\-]{20,}['"]?/i,
     severity: 'high',
     fix: 'Move API keys to environment variables.',
   },
   {
     name: 'Private Key Header',
-    pattern: /-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----/g,
+    pattern: /-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----/,
     severity: 'critical',
     fix: 'Remove private key from source code. Store in secure secret manager.',
   },
   {
     name: 'Hardcoded Password',
-    pattern: /(?:password|passwd|pwd)\s*[=:]\s*['"][^'"{][^'"]{3,}['"](?!\s*\+)/gi,
+    pattern: /(?:password|passwd|pwd)\s*[=:]\s*['"][^'"{][^'"]{3,}['"](?!\s*\+)/i,
     severity: 'high',
     fix: 'Move passwords to environment variables.',
   },
   {
     name: 'Bearer Token',
-    pattern: /bearer\s+[A-Za-z0-9\-._~+/]+=*/gi,
+    pattern: /bearer\s+[A-Za-z0-9\-._~+/]+=*/i,
     severity: 'high',
     fix: 'Remove bearer tokens from source code.',
   },
   {
     name: 'Stripe Secret Key',
-    pattern: /sk_live_[A-Za-z0-9]{24,}/g,
+    pattern: /sk_live_[A-Za-z0-9]{24,}/,
     severity: 'critical',
     fix: 'Revoke the Stripe secret key and generate a new one.',
   },
   {
     name: 'SendGrid API Key',
-    pattern: /SG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43}/g,
+    pattern: /SG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43}/,
     severity: 'critical',
     fix: 'Revoke the SendGrid API key and generate a new one.',
   },
   {
     name: 'Slack Token',
-    pattern: /xox[baprs]-[A-Za-z0-9\-]{10,}/g,
+    pattern: /xox[baprs]-[A-Za-z0-9\-]{10,}/,
     severity: 'high',
     fix: 'Revoke the Slack token.',
   },
@@ -299,8 +299,6 @@ export class SecurityScanner {
         for (const secretPattern of SECRET_PATTERNS) {
           for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
             const line = lines[lineIdx];
-            // Reset regex state
-            secretPattern.pattern.lastIndex = 0;
             if (secretPattern.pattern.test(line)) {
               issues.push({
                 severity: secretPattern.severity,

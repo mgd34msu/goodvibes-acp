@@ -43,6 +43,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       required: ['projectRoot'],
+      additionalProperties: false,
       properties: {
         projectRoot: { type: 'string', description: 'Absolute path to the project root' },
         checkOutdated: { type: 'boolean', description: 'Check for outdated packages (default: false)' },
@@ -57,6 +58,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       required: ['projectRoot'],
+      additionalProperties: false,
       properties: {
         projectRoot: { type: 'string', description: 'Absolute path to the project root' },
       },
@@ -68,6 +70,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       required: ['projectRoot'],
+      additionalProperties: false,
       properties: {
         projectRoot: { type: 'string', description: 'Absolute path to the project root' },
       },
@@ -79,6 +82,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       required: ['projectRoot'],
+      additionalProperties: false,
       properties: {
         projectRoot: { type: 'string', description: 'Absolute path to the project root' },
       },
@@ -90,6 +94,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       required: ['projectRoot'],
+      additionalProperties: false,
       properties: {
         projectRoot: { type: 'string', description: 'Absolute path to the project root' },
       },
@@ -102,6 +107,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       required: ['projectRoot'],
+      additionalProperties: false,
       properties: {
         projectRoot: { type: 'string', description: 'Absolute path to the project root' },
       },
@@ -113,6 +119,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       required: ['projectRoot'],
+      additionalProperties: false,
       properties: {
         projectRoot: { type: 'string', description: 'Absolute path to the project root' },
         estimateCoverage: {
@@ -129,6 +136,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       required: ['projectRoot'],
+      additionalProperties: false,
       properties: {
         projectRoot: { type: 'string', description: 'Absolute path to the project root' },
       },
@@ -140,6 +148,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       required: ['schemaPath'],
+      additionalProperties: false,
       properties: {
         schemaPath: {
           type: 'string',
@@ -154,6 +163,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       required: ['table', 'operation'],
+      additionalProperties: false,
       properties: {
         table: { type: 'string', description: 'Table name' },
         operation: {
@@ -176,6 +186,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       required: ['schemaPath'],
+      additionalProperties: false,
       properties: {
         schemaPath: {
           type: 'string',
@@ -190,6 +201,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       required: ['projectRoot'],
+      additionalProperties: false,
       properties: {
         projectRoot: { type: 'string', description: 'Absolute path to the project root' },
         include: {
@@ -213,7 +225,7 @@ export class ProjectAnalyzer implements IToolProvider {
   private readonly _deps: DependencyAnalyzer;
   private readonly _security: SecurityScanner;
   private readonly _test: TestAnalyzer;
-  private readonly _db = new DatabaseTools();
+  private readonly _db: DatabaseTools;
 
   // ISS-051: Optional ITextFileAccess injected to all sub-analyzers so they
   // can use ACP-compliant file reads (editor buffer aware) when available.
@@ -221,6 +233,7 @@ export class ProjectAnalyzer implements IToolProvider {
     this._deps = new DependencyAnalyzer(fs);
     this._security = new SecurityScanner(fs);
     this._test = new TestAnalyzer(fs);
+    this._db = new DatabaseTools(fs);
   }
 
   async execute<T = unknown>(toolName: string, params: unknown): Promise<ToolResult<T>> {
@@ -244,6 +257,25 @@ export class ProjectAnalyzer implements IToolProvider {
 
   private async _dispatch(toolName: string, params: unknown): Promise<unknown> {
     const p = params as Record<string, unknown>;
+
+    // Validate required projectRoot for tools that need it
+    const requiresProjectRoot = [
+      'project_deps_analyze', 'project_deps_circular', 'project_deps_upgrade',
+      'project_security_env', 'project_security_permissions', 'project_security_secrets',
+      'project_test_find', 'project_test_coverage', 'project_code_surface',
+    ];
+    if (requiresProjectRoot.includes(toolName) && !p['projectRoot']) {
+      return { success: false, error: `Missing required parameter 'projectRoot' for tool '${toolName}'` };
+    }
+    // Validate required schemaPath for db tools
+    const requiresSchemaPath = ['project_db_prisma', 'project_db_schema'];
+    if (requiresSchemaPath.includes(toolName) && !p['schemaPath']) {
+      return { success: false, error: `Missing required parameter 'schemaPath' for tool '${toolName}'` };
+    }
+    // Validate required table+operation for query tool
+    if (toolName === 'project_db_query' && (!p['table'] || !p['operation'])) {
+      return { success: false, error: `Missing required parameters 'table' and/or 'operation' for tool '${toolName}'` };
+    }
 
     switch (toolName) {
       case 'project_deps_analyze': {

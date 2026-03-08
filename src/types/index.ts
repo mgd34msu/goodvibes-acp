@@ -27,3 +27,4 @@ export * from './transport';
 export * from './trigger';
 export * from './wrfc';
 export * from './permissions';
+export * from './review-scoring';

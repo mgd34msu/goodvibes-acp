@@ -63,6 +63,9 @@ export interface ScheduledTask {
  * scheduler.destroy(); // cancels all
  * ```
  */
+/** Default interval in milliseconds when no intervalMs is specified (1 minute) */
+const DEFAULT_INTERVAL_MS = 60_000;
+
 export class Scheduler {
   private readonly _tasks = new Map<string, ScheduledTask>();
   private readonly _timers = new Map<string, ReturnType<typeof setInterval>>();
@@ -81,7 +84,7 @@ export class Scheduler {
       throw new Error(`Scheduler: task '${id}' is already scheduled. Cancel it first.`);
     }
 
-    const intervalMs = config.intervalMs ?? 60000;
+    const intervalMs = config.intervalMs ?? DEFAULT_INTERVAL_MS;
     const task: ScheduledTask = {
       id,
       config,
@@ -158,7 +161,7 @@ export class Scheduler {
     const task = this._tasks.get(id);
     if (!task || task.status !== 'paused') return;
 
-    const intervalMs = task.config.intervalMs ?? 60000;
+    const intervalMs = task.config.intervalMs ?? DEFAULT_INTERVAL_MS;
     task.status = 'scheduled';
     task.nextRun = Date.now() + intervalMs;
 
@@ -219,7 +222,7 @@ export class Scheduler {
     task.lastRun = Date.now();
     task.runCount++;
 
-    const intervalMs = task.config.intervalMs ?? 60000;
+    const intervalMs = task.config.intervalMs ?? DEFAULT_INTERVAL_MS;
 
     const done = () => {
       task.activeCount--;

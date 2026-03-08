@@ -9,7 +9,7 @@
  * under the well-known key `'agent_spawner'`, keeping L2 free of L3 imports.
  */
 
-import type { AgentConfig, AgentHandle, AgentResult, AgentStatus } from '../../types/agent.js';
+import type { AgentConfig, AgentHandle, AgentMetadata, AgentResult, AgentStatus } from '../../types/agent.js';
 import type { IAgentSpawner } from '../../types/registry.js';
 import { EventBus } from '../../core/event-bus.js';
 import { Registry } from '../../core/registry.js';
@@ -112,6 +112,39 @@ export class AgentCoordinator {
   status(handle: AgentHandle): AgentStatus {
     const spawner = this._getSpawner();
     return spawner.status(handle);
+  }
+
+  /**
+   * Return agent data for all agents belonging to `sessionId`, formatted as
+   * the KB-08 `_goodvibes/agents` extension response schema (ISS-055).
+   *
+   * Maps internal `AgentMetadata` fields to the ACP wire format:
+   * - `startedAt` falls back to `spawnedAt` when the agent has not yet started
+   * - `score` is forwarded when present on the stored metadata
+   */
+  toAcpAgentsResponse(sessionId: string): {
+    agents: Array<{
+      id: string;
+      type: string;
+      status: AgentStatus;
+      startedAt: number;
+      finishedAt?: number;
+      durationMs?: number;
+      score?: number;
+    }>;
+  } {
+    const agents = this._tracker.getBySession(sessionId).map((m) => ({
+      id: m.id,
+      type: m.type,
+      status: m.status,
+      startedAt: m.startedAt ?? m.spawnedAt,
+      ...(m.finishedAt !== undefined ? { finishedAt: m.finishedAt } : {}),
+      ...(m.durationMs !== undefined ? { durationMs: m.durationMs } : {}),
+      ...((m as AgentMetadata & { score?: number }).score !== undefined
+        ? { score: (m as AgentMetadata & { score?: number }).score }
+        : {}),
+    }));
+    return { agents };
   }
 
   // ---------------------------------------------------------------------------

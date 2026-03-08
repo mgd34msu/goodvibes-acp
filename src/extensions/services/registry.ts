@@ -128,10 +128,21 @@ export class ServiceRegistry {
           `ServiceRegistry: invalid store format in ${filePath}: 'services' must be an array`,
         );
       }
-      const typedCandidate = candidate as { $schema?: unknown; services?: ServiceEntry[] };
+      const typedCandidate = candidate as { $schema?: unknown; services?: unknown[] };
+      const rawEntries = Array.isArray(typedCandidate.services) ? typedCandidate.services : [];
+      const validEntries: ServiceEntry[] = [];
+      for (const entry of rawEntries) {
+        if (!this._validateEntry(entry)) {
+          console.warn(
+            `ServiceRegistry: skipping invalid entry in ${filePath}: ${JSON.stringify(entry)}`
+          );
+          continue;
+        }
+        validEntries.push(entry);
+      }
       this._store = {
         $schema: typeof typedCandidate.$schema === 'string' ? typedCandidate.$schema : SCHEMA_VERSION,
-        services: Array.isArray(typedCandidate.services) ? typedCandidate.services : [],
+        services: validEntries,
       };
     } catch (err: unknown) {
       const code = (err as NodeJS.ErrnoException).code;
@@ -247,5 +258,26 @@ export class ServiceRegistry {
 
   private _emptyStore(): ServiceStore {
     return { $schema: SCHEMA_VERSION, services: [] };
+  }
+
+  /**
+   * Type guard that validates an individual ServiceEntry from loaded data.
+   * Filters out corrupted or incomplete entries during load() (ISS-113).
+   */
+  private _validateEntry(entry: unknown): entry is ServiceEntry {
+    if (typeof entry !== 'object' || entry === null) return false;
+    const e = entry as Record<string, unknown>;
+    if (typeof e['name'] !== 'string' || e['name'].length === 0) return false;
+    if (typeof e['registeredAt'] !== 'string') return false;
+    const config = e['config'];
+    if (typeof config !== 'object' || config === null) return false;
+    const cfg = config as Record<string, unknown>;
+    if (typeof cfg['endpoint'] !== 'string') return false;
+    try {
+      new URL(cfg['endpoint'] as string);
+    } catch {
+      return false;
+    }
+    return true;
   }
 }

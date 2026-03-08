@@ -71,6 +71,8 @@ export interface EventBusOptions {
  */
 export class EventBus {
   private readonly _handlers = new Map<string, Set<EventHandler>>();
+  /** Prefix wildcard handlers keyed by prefix (e.g., 'session:') for O(1) lookup */
+  private readonly _prefixHandlers = new Map<string, Set<EventHandler>>();
   private readonly _history: EventRecord[];
   private readonly _historyLimit: number;
   /** Write index for O(1) circular ring buffer insertion */
@@ -97,10 +99,19 @@ export class EventBus {
     handler: EventHandler<TPayload>
   ): Disposable {
     this._assertNotDestroyed();
-    if (!this._handlers.has(event)) {
-      this._handlers.set(event, new Set());
+    if (event.endsWith(':*')) {
+      // Register in the prefix map for O(1) emit-time lookup
+      const prefix = event.slice(0, -1); // e.g. 'session:' from 'session:*'
+      if (!this._prefixHandlers.has(prefix)) {
+        this._prefixHandlers.set(prefix, new Set());
+      }
+      this._prefixHandlers.get(prefix)!.add(handler as EventHandler);
+    } else {
+      if (!this._handlers.has(event)) {
+        this._handlers.set(event, new Set());
+      }
+      this._handlers.get(event)!.add(handler as EventHandler);
     }
-    this._handlers.get(event)!.add(handler as EventHandler);
     return {
       dispose: () => this.off(event, handler as EventHandler),
     };
@@ -161,11 +172,18 @@ export class EventBus {
    *
    * @param type - Event type string
    * @param payload - Event payload
-   * @param sessionId - Optional explicit session ID. When provided, takes precedence
-   *   over the `sessionId` field extracted from the payload.
+   * @param options - Optional emit options: sessionId and/or _meta for trace context propagation
    */
-  emit<TPayload = unknown>(type: string, payload: TPayload, sessionId?: string): void {
+  emit<TPayload = unknown>(
+    type: string,
+    payload: TPayload,
+    options?: string | { sessionId?: string; _meta?: Record<string, unknown> }
+  ): void {
     if (this._destroyed) return;
+
+    // Accept options as plain string (legacy sessionId) or as options object
+    const sessionId = typeof options === 'string' ? options : options?.sessionId;
+    const meta = typeof options === 'object' ? options?._meta : undefined;
 
     const record: EventRecord<TPayload> = {
       id: this._nextId(),
@@ -175,6 +193,7 @@ export class EventBus {
       sessionId:
         sessionId ??
         ((payload as Record<string, unknown>)?.sessionId as string | undefined),
+      ...(meta !== undefined ? { _meta: meta } : {}),
     };
 
     // Add to history ring buffer — O(1) circular write
@@ -194,13 +213,12 @@ export class EventBus {
       sets.push(this._handlers.get('*')!);
     }
 
-    // Prefix wildcards e.g. 'session:*' matches 'session:started'
-    for (const [key, handlerSet] of this._handlers) {
-      if (key !== type && key !== '*' && key.endsWith(':*')) {
-        const prefix = key.slice(0, -1); // 'session:'
-        if (type.startsWith(prefix)) {
-          sets.push(handlerSet);
-        }
+    // Prefix wildcards — O(1) lookup via dedicated prefix map (e.g., 'session:' matches 'session:started')
+    const colonIdx = type.lastIndexOf(':');
+    if (colonIdx !== -1) {
+      const prefix = type.slice(0, colonIdx + 1); // e.g., 'session:'
+      if (this._prefixHandlers.has(prefix)) {
+        sets.push(this._prefixHandlers.get(prefix)!);
       }
     }
 
@@ -228,7 +246,12 @@ export class EventBus {
    * @param handler - Handler to remove
    */
   off<TPayload = unknown>(event: string, handler: EventHandler<TPayload>): void {
-    this._handlers.get(event)?.delete(handler as EventHandler);
+    if (event.endsWith(':*')) {
+      const prefix = event.slice(0, -1);
+      this._prefixHandlers.get(prefix)?.delete(handler as EventHandler);
+    } else {
+      this._handlers.get(event)?.delete(handler as EventHandler);
+    }
   }
 
   /**
@@ -270,6 +293,7 @@ export class EventBus {
    */
   clear(): void {
     this._handlers.clear();
+    this._prefixHandlers.clear();
     this._history.fill(undefined as unknown as EventRecord);
     this._writeIdx = 0;
   }
@@ -281,6 +305,7 @@ export class EventBus {
    */
   destroy(): void {
     this._handlers.clear();
+    this._prefixHandlers.clear();
     this._history.fill(undefined as unknown as EventRecord);
     this._writeIdx = 0;
     this._destroyed = true;

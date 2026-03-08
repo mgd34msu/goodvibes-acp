@@ -70,8 +70,13 @@ export class GoodVibesExtensions {
         return this._agents();
       case '_goodvibes/analytics':
         return this._analytics(params);
-      default:
-        return { error: 'unknown_method', _meta: META };
+      default: {
+        // ISS-066: JSON-RPC 2.0 requires error code -32601 for unknown methods,
+        // not a success response with an error field.
+        const err = new Error(`Unknown extension method: ${method}`);
+        (err as Error & { code: number }).code = -32601;
+        throw err;
+      }
     }
   }
 
