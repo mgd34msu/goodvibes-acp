@@ -29,6 +29,16 @@ export const AgentsPlugin: PluginRegistration = {
   },
   register: (registry: unknown) => {
     const reg = registry as Registry;
+    // NOTE ISS-037: AgentSpawnerPlugin is constructed without onProgressFactory here,
+    // so WRFC progress events will be invisible until one is injected.
+    // To wire progress: cast the registered instance and call setOnProgressFactory(factory)
+    // once the ACP session connection is established (e.g., in the server setup code):
+    //
+    //   const spawner = reg.get<AgentSpawnerPlugin>('agent-spawner');
+    //   spawner.setOnProgressFactory((sessionId) => (event) => {
+    //     acpSession.emit('tool_call_update', { sessionId, event });
+    //   });
+    //
     reg.register('agent-spawner', new AgentSpawnerPlugin(reg));
   },
   shutdown: async () => {},

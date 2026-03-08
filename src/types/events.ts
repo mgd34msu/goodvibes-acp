@@ -255,7 +255,11 @@ export type SessionModeChangedEvent = Event<SessionModeChangedPayload> & { type:
 // ACP wire-protocol update discriminators
 // ---------------------------------------------------------------------------
 
-/** ACP wire-protocol session update discriminators */
+/**
+ * ACP wire-protocol session update discriminators.
+ * These are valid values for the `sessionUpdate` discriminator field on the wire
+ * (not a `type` field — see KB-04 and KB-09).
+ */
 export type AcpSessionUpdateType =
   | 'agent_message_chunk'
   | 'tool_call'
@@ -265,4 +269,5 @@ export type AcpSessionUpdateType =
   | 'session_info'
   | 'available_commands'
   | 'current_mode'
-  | 'config_options_update';
+  | 'config_options_update'
+  | 'finish';

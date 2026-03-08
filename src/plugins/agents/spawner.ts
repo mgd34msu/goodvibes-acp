@@ -50,8 +50,11 @@ type AgentState = {
   errors: AgentError[];
   /**
    * Files modified by the agent loop.
-   * TODO: Populate from AgentLoopResult once the loop tracks file modifications.
-   * Currently undefined because AgentLoopResult does not expose this information.
+   * Populated from AgentLoopResult when the loop reports file modifications.
+   * Falls back to [] when the loop does not track file modifications.
+   * TODO ISS-038: Implement file modification tracking in AgentLoop to populate this.
+   * The loop must intercept write/edit/create tool calls and expose filesModified
+   * in AgentLoopResult. Until then, this field will always be [].
    */
   filesModified: string[] | undefined;
   startedAt?: number;
@@ -75,7 +78,7 @@ type AgentState = {
 export class AgentSpawnerPlugin implements IAgentSpawner {
   private readonly _agents = new Map<string, AgentState>();
   private readonly _registry: Registry | undefined;
-  private readonly _onProgressFactory: OnProgressFactory | undefined;
+  private _onProgressFactory: OnProgressFactory | undefined;
 
   /**
    * @param registry           — optional L1 Registry. When provided and an
@@ -90,6 +93,18 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
   constructor(registry?: Registry, onProgressFactory?: OnProgressFactory) {
     this._registry = registry;
     this._onProgressFactory = onProgressFactory;
+  }
+
+  /**
+   * Set or replace the onProgressFactory after construction.
+   * Allows the ACP layer to inject progress wiring once the connection
+   * is established, without requiring it to be available at registration time.
+   * See ISS-037.
+   *
+   * @param factory - Factory that returns a per-session progress handler.
+   */
+  setOnProgressFactory(factory: OnProgressFactory): void {
+    this._onProgressFactory = factory;
   }
 
   // -------------------------------------------------------------------------
@@ -312,7 +327,7 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
         message: loopResult.error ?? 'Unknown error',
       });
     } else {
-      // 'complete' or 'max_turns'
+      // 'end_turn' or 'max_turn_requests'
       state.status = 'completed';
     }
 
@@ -376,8 +391,8 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
       handle: state.handle,
       status: state.status as AgentResult['status'],
       output: state.output,
-      // filesModified is undefined when the loop did not report file modifications.
-      // TODO: Populate once AgentLoopResult exposes this information.
+      // filesModified defaults to [] when the loop does not expose file modification data.
+      // TODO ISS-038: Remove fallback once AgentLoopResult.filesModified is implemented.
       filesModified: state.filesModified ?? [],
       errors: state.errors,
       durationMs: finishedAt - spawnedAt,

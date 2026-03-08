@@ -27,14 +27,28 @@ export type SessionMode = 'vibecoding' | 'justvibes' | 'sandbox' | 'plan';
 // ---------------------------------------------------------------------------
 
 /**
+ * An environment variable entry for stdio MCP server subprocesses.
+ * Matches ACP spec `EnvVariable` (KB-03).
+ */
+export type EnvVariable = { name: string; value: string };
+
+/**
+ * An HTTP header entry for HTTP/SSE MCP server connections.
+ * Matches ACP spec `HttpHeader` (KB-03).
+ */
+export type HttpHeader = { name: string; value: string };
+
+/**
  * MCP server connection definition.
  *
- * ACP spec discriminated union:
- * - stdio: spawn a local subprocess (`command`, optional `args`, optional `env`)
- * - http/sse: connect to a remote HTTP/SSE endpoint (`url`, optional `headers`)
+ * ACP spec discriminated union (use `type` to narrow):
+ * - `'stdio'`: spawn a local subprocess (`command`, optional `args`, optional `env`)
+ * - `'http'` | `'sse'`: connect to a remote HTTP/SSE endpoint (`url`, optional `headers`)
  */
 export type MCPServerConfig =
   | {
+      /** Discriminator — identifies this as a stdio MCP server */
+      type: 'stdio';
       /** Server name / identifier */
       name: string;
       /** Executable command to spawn */
@@ -42,15 +56,17 @@ export type MCPServerConfig =
       /** Command-line arguments */
       args?: string[];
       /** Additional environment variables for the subprocess */
-      env?: Record<string, string>;
+      env?: EnvVariable[];
     }
   | {
+      /** Discriminator — identifies this as an HTTP or SSE MCP server */
+      type: 'http' | 'sse';
       /** Server name / identifier */
       name: string;
       /** HTTP or SSE endpoint URL */
       url: string;
       /** Optional HTTP headers (e.g. Authorization) */
-      headers?: Record<string, string>;
+      headers?: HttpHeader[];
     };
 
 /** Static configuration for a session */

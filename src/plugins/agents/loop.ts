@@ -69,7 +69,13 @@ export interface AgentLoopResult {
   /** Total token usage */
   usage: { inputTokens: number; outputTokens: number };
   /** How the loop ended */
-  stopReason: 'complete' | 'max_turns' | 'cancelled' | 'error';
+  /**
+   * How the loop ended.
+   * Uses ACP-defined stop reason values (see KB-04 lines 446-460).
+   * 'error' is an internal extension value — ACP has no error stop reason.
+   * It is translated at the L2 ACP layer and never sent to clients directly.
+   */
+  stopReason: 'end_turn' | 'max_turn_requests' | 'cancelled' | 'error';
   /** Error message if stopReason is 'error' */
   error?: string;
 }
@@ -118,6 +124,15 @@ export class AgentLoop {
           tools: toolDefs.length > 0 ? toolDefs : undefined,
           signal: this.config.signal,
         };
+        // TODO ISS-060: This uses non-streaming chat(). Switch to provider.stream() to enable
+        // agent_message_chunk ACP updates during LLM inference (KB-04 lines 91-117).
+        // Steps:
+        //   1. Replace chat() with stream() returning AsyncIterable<ChatChunk>
+        //   2. Accumulate content blocks and emit onProgress({type:'agent_message_chunk', chunk})
+        //      for each text delta chunk via the onProgress callback
+        //   3. Handle tool_use blocks when the stream signals tool calls
+        //   4. Add AgentLoopConfig.streaming?: boolean (default true) for test compatibility
+        //   5. Wire onProgress to the ACP session update emitter so chunks reach the client
         response = await this.config.provider.chat(params);
       } catch (err) {
         if (this.config.signal?.aborted) {
@@ -154,7 +169,7 @@ export class AgentLoop {
 
       // end_turn or max_tokens — agent is done
       if (response.stopReason === 'end_turn' || response.stopReason === 'max_tokens') {
-        return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'complete' };
+        return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'end_turn' };
       }
 
       // tool_use — execute tools and feed results back
@@ -164,11 +179,11 @@ export class AgentLoop {
         continue;
       }
 
-      // Unknown stop reason — treat as complete
-      return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'complete' };
+      // Unknown stop reason — treat as end_turn
+      return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'end_turn' };
     }
 
-    return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'max_turns' };
+    return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'max_turn_requests' };
   }
 
   // ---------------------------------------------------------------------------
@@ -200,6 +215,17 @@ export class AgentLoop {
     const results: ContentBlock[] = [];
 
     for (const block of toolUseBlocks) {
+      // ISS-036: Check cancellation before each tool execution (ACP KB-04 session/cancel protocol)
+      if (this.config.signal?.aborted) {
+        results.push({
+          type: 'tool_result',
+          tool_use_id: block.id,
+          content: 'Cancelled',
+          is_error: true,
+        });
+        continue;
+      }
+
       const startTime = Date.now();
       this.config.onProgress?.({ type: 'tool_start', turn, toolName: block.name });
 

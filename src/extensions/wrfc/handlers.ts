@@ -253,9 +253,9 @@ export class WRFCHandlers {
 
     const directive: Directive = {
       id: crypto.randomUUID(),
-      action: 'escalate',
+      action: 'cancel',
       workId,
-      priority: 'high',
+      priority: 'normal',
       createdAt: Date.now(),
       meta: { sessionId, reason: 'cancelled' },
     };

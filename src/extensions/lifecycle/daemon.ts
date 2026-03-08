@@ -226,8 +226,9 @@ export class DaemonManager {
         if (this._options?.onConnection) {
           this._options.onConnection(socket);
         } else {
-          // Fallback: keep socket open until closed by the client.
-          socket.on('error', () => socket.destroy());
+          // No ACP handler configured — refuse connection to prevent zombie sockets.
+          console.warn('[DaemonManager] No onConnection handler configured — refusing connection from ' + socket.remoteAddress + ':' + socket.remotePort);
+          socket.destroy();
         }
       });
 

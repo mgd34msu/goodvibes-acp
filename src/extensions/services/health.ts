@@ -54,7 +54,16 @@ const DEFAULT_RETRY_DELAY_MS = 500;
 
 /**
  * Checks external HTTP service health via HEAD/GET probes.
- * TODO: Wire into ACP extension method (e.g., _goodvibes/health) or remove.
+ *
+ * STATUS: Not yet integrated with ACP (ISS-040).
+ * This class is fully implemented but is not wired to any ACP extension method
+ * or runtime path. It is exported for future use.
+ *
+ * To integrate: create a `_goodvibes/health` extension method handler:
+ *   case '_goodvibes/health':
+ *     const checker = new ServiceHealthChecker(registry, eventBus);
+ *     const results = await checker.checkAll();
+ *     return { status: 'ok', services: Object.fromEntries(results) };
  *
  * Probes each service's endpoint using an HTTP HEAD request (falls back to GET
  * on 405 Method Not Allowed). A 2xx/3xx response is healthy; 5xx is unhealthy;

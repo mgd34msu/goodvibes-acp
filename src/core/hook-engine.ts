@@ -176,8 +176,9 @@ export class HookEngine {
         if (result !== undefined && result !== null) {
           current = result as T;
         }
-      } catch {
-        // Error isolation: continue with unchanged context
+      } catch (err) {
+        // Error isolation: log but don't crash (ACP KB-08: log for debugging)
+        console.warn(`[HookEngine] Pre-hook failed at '${hookPoint}':`, err);
       }
     }
     return current;
@@ -199,8 +200,9 @@ export class HookEngine {
     for (const entry of entries) {
       try {
         await (entry as HookEntry<T>).postHandler?.(context, result);
-      } catch {
-        // Error isolation: continue to next hook
+      } catch (err) {
+        // Error isolation: log but don't crash (ACP KB-08: log for debugging)
+        console.warn(`[HookEngine] Post-hook failed at '${hookPoint}':`, err);
       }
     }
   }

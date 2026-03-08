@@ -114,6 +114,16 @@ export class MemoryManager {
     this._basePath = basePath;
     this._bus = eventBus;
     this._store = emptyStore();
+
+    // ISS-053: Wire clearSession to session:destroyed to prevent memory leaks.
+    // session:destroyed is emitted by SessionManager when a session ends.
+    // EventRecord.payload shape for session:destroyed is { sessionId: string }.
+    this._bus.on<{ sessionId?: string }>('session:destroyed', (event) => {
+      const sessionId = event.payload?.sessionId;
+      if (typeof sessionId === 'string') {
+        this.clearSession(sessionId);
+      }
+    });
   }
 
   // -------------------------------------------------------------------------

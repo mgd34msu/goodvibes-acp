@@ -34,25 +34,29 @@ import type { PermissionRequest, PermissionResult, PermissionPolicy, PermissionT
  * - `plan`       → ask mode (prompt for most actions; only reads pass silently)
  * - `sandbox`    → custom restricted mode (fs/mcp auto-approved; extensions always denied)
  */
+// ISS-068: Use spec-defined permission types (file_write, file_delete, network, browser)
+// instead of the non-spec 'fs' category. 'mcp' and 'extension' are GoodVibes extensions
+// allowed by the spec's open-ended permission type string.
 export const MODE_POLICIES: Record<string, PermissionPolicy> = {
   justvibes: {
-    autoApprove: ['fs', 'shell', 'mcp', 'extension'],
+    autoApprove: ['file_write', 'file_delete', 'network', 'browser', 'shell', 'mcp', 'extension'],
     alwaysDeny: [],
     promptForUnknown: false,
   },
   vibecoding: {
-    autoApprove: ['fs', 'shell', 'mcp'],
+    autoApprove: ['file_write', 'file_delete', 'shell', 'mcp'],
     alwaysDeny: [],
     promptForUnknown: true,
   },
   plan: {
-    autoApprove: ['fs'],
-    alwaysDeny: ['shell'],
+    // Auto-approve writes but not deletes — preserves granularity from spec
+    autoApprove: ['file_write'],
+    alwaysDeny: ['shell', 'file_delete'],
     promptForUnknown: true,
   },
   sandbox: {
-    autoApprove: ['mcp', 'fs'],
-    alwaysDeny: ['extension'],
+    autoApprove: ['mcp', 'file_write'],
+    alwaysDeny: ['extension', 'network', 'browser'],
     promptForUnknown: true,
   },
 };
@@ -119,12 +123,10 @@ function isGranted(outcome: acp.RequestPermissionOutcome): boolean {
  *
  * If the client request throws (e.g., session cancelled), the action is denied.
  *
- * @integration ISS-016 — This class must be wired into the agent tool-execution
- * lifecycle (hooks/registrar.ts) so that `check()` is called before each tool
- * invocation.  Until that wiring exists, permission checks are never enforced.
- *
- * @todo ISS-015 — PermissionGate is not yet instantiated or used.  Wire it into
- * the agent lifecycle via hooks/registrar.ts before shipping.
+ * @integration ISS-018 — Wired into the agent tool-execution lifecycle via
+ * HookRegistrar (hooks/registrar.ts). Pass a PermissionGate instance to the
+ * HookRegistrar constructor to activate permission checks before each tool
+ * invocation. Without a wired instance, the hook logs a warning and passes through.
  */
 export class PermissionGate {
   constructor(
@@ -166,6 +168,10 @@ export class PermissionGate {
     // this code should be simplified to use the boolean response directly.
     try {
       const toolCallId = request.toolCallId ?? randomUUID();
+      // ISS-017: ACP wire spec expects permission: { type, title, description }.
+      // SDK v0.15.0 uses options: PermissionOption[], toolCall instead (documented divergence).
+      // When the SDK aligns with the wire spec, replace this with:
+      //   permission: { type: request.type, title: request.title, description: request.description }
       const response = await this.conn.requestPermission({
         sessionId: this.sessionId,
         options: buildPermissionOptions(),
@@ -183,10 +189,9 @@ export class PermissionGate {
         ...(granted ? {} : { reason: 'Permission denied by user' }),
       };
     } catch (err) {
-      // Distinguish user cancellation from unexpected errors
-      const isCancelled =
-        err instanceof Error &&
-        (err.name === 'AbortError' || (err instanceof DOMException && err.name === 'AbortError'));
+      // ISS-069: Simplified cancellation check — err.name === 'AbortError' covers both
+      // browser DOMException and Node.js AbortError without redundant instanceof checks.
+      const isCancelled = err instanceof Error && err.name === 'AbortError';
       return {
         granted: false,
         reason: isCancelled ? 'cancelled' : 'Permission request failed',

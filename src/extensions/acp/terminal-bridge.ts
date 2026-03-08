@@ -151,6 +151,10 @@ export class AcpTerminal implements ITerminal {
     const internal = this._requireHandle(handle.id);
 
     if (internal.kind === 'acp') {
+      // ISS-073: The ACP SDK's currentOutput() does not currently accept a timeout
+      // parameter (Expected 0 arguments). The timeout is consumed locally via
+      // Promise.race as a fallback. When the SDK is updated to accept a timeout,
+      // forward it as: internal.acpHandle.currentOutput({ timeout })
       const outputPromise = internal.acpHandle.currentOutput();
       const result: schema.TerminalOutputResponse = timeout !== undefined
         ? await Promise.race([
@@ -166,9 +170,13 @@ export class AcpTerminal implements ITerminal {
       };
     }
 
-    // Spawn-backed: combine buffered stdout
+    // Spawn-backed: combine buffered stdout and stderr.
+    // ACP spec (KB-07) expects combined terminal output in a single `output` field
+    // (stdout + stderr interleaved, matching real terminal behavior).
+    // Since we buffer stdout and stderr separately, we concatenate them here.
+    // For interleaved order, refactor to push both into a single combined buffer.
     return {
-      output: internal.stdout.join(''),
+      output: internal.stdout.join('') + internal.stderr.join(''),
       exitCode: internal.exitCode,
     };
   }

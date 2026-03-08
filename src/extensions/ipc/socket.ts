@@ -21,6 +21,10 @@ import {
 import type { IpcMessage, IpcRequest, IpcResponse } from './protocol.js';
 import type { IpcRouter } from './router.js';
 
+// JSON-RPC 2.0 standard error codes
+const RPC_PARSE_ERROR = -32700;
+const RPC_INTERNAL_ERROR = -32603;
+
 // ---------------------------------------------------------------------------
 // Internal types
 // ---------------------------------------------------------------------------
@@ -52,7 +56,6 @@ export class IpcSocketServer {
   private readonly _router: IpcRouter;
   private _server: Server | null = null;
   private _socketPath: string | null = null;
-  private _idCounter = 0;
 
   constructor(eventBus: EventBus, router: IpcRouter) {
     this._eventBus = eventBus;
@@ -203,11 +206,9 @@ export class IpcSocketServer {
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       const response: IpcResponse = buildResponse(
-        this._nextId(),
-        'unknown',
-        false,
         null,
-        `Parse error: ${errMsg}`,
+        null,
+        { code: RPC_PARSE_ERROR, message: `Parse error: ${errMsg}` },
       );
       this._sendResponse(socket, response);
       return;
@@ -229,11 +230,9 @@ export class IpcSocketServer {
       (err: unknown) => {
         const errMsg = err instanceof Error ? err.message : String(err);
         const response: IpcResponse = buildResponse(
-          this._nextId(),
           request.id,
-          false,
           null,
-          errMsg,
+          { code: RPC_INTERNAL_ERROR, message: errMsg },
         );
         this._sendResponse(socket, response);
       },
@@ -244,9 +243,5 @@ export class IpcSocketServer {
     if (socket.writable) {
       socket.write(serializeMessage(response));
     }
-  }
-
-  private _nextId(): string {
-    return `ipc_${Date.now()}_${++this._idCounter}`;
   }
 }

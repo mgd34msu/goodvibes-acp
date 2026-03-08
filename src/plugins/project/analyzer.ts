@@ -248,7 +248,11 @@ export class ProjectAnalyzer implements IToolProvider {
     switch (toolName) {
       case 'project_deps_analyze': {
         const args = p as AnalyzeDepsParams;
-        return this._deps.analyze(args.projectRoot);
+        return this._deps.analyze(args.projectRoot, {
+          checkOutdated: args.checkOutdated,
+          detectCircular: args.detectCircular,
+          findUnused: args.findUnused,
+        });
       }
 
       case 'project_deps_circular': {

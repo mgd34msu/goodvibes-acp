@@ -16,3 +16,4 @@ export { WRFCOrchestrator } from './orchestrator.js';
 export type { WRFCCallbacks, WRFCRunParams } from './orchestrator.js';
 export { WRFCHandlers } from './handlers.js';
 export type { WRFCHandlerOptions } from './handlers.js';
+export { WRFCEventBridge } from './wrfc-event-bridge.js';

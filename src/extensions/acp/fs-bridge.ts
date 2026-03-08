@@ -90,6 +90,14 @@ export class AcpFileSystem implements ITextFileAccess {
    */
   async writeTextFile(path: string, content: string, options?: WriteOptions): Promise<void> {
     if (this.clientCapabilities.fs?.writeTextFile) {
+      // The ACP fs/write_text_file spec (KB-07) does not include an encoding field —
+      // the protocol assumes UTF-8. If the caller requests a non-UTF-8 encoding,
+      // throw rather than silently producing different behavior on ACP vs disk paths.
+      if (options?.encoding && options.encoding !== 'utf-8' && options.encoding !== 'utf8') {
+        throw new Error(
+          `ACP fs/write_text_file does not support encoding '${options.encoding}' — only UTF-8 is supported on the ACP path`
+        );
+      }
       await this.conn.writeTextFile({
         path,
         content,

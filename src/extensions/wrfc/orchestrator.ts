@@ -299,11 +299,9 @@ export class WRFCOrchestrator {
         (err instanceof DOMException && err.name === 'AbortError') || signal?.aborted;
 
       if (isAbort) {
-        // Drive the machine to a terminal state via the FAIL event.
-        // A dedicated CANCEL event/state is not available in the current L0 types;
-        // the cancelledAt timestamp in context distinguishes this from a genuine failure.
+        // Drive the machine to the 'cancelled' terminal state.
         if (!WRFC_TERMINAL_STATES.has(machine.current())) {
-          machine.transition(WRFC_EVENTS.FAIL);
+          machine.transition(WRFC_EVENTS.CANCEL);
         }
         machine.updateContext((ctx) => ({
           ...ctx,

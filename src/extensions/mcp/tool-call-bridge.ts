@@ -42,14 +42,15 @@ import type { AgentProgressEvent } from '../../types/agent.js';
  * ```
  */
 /**
- * Status terminology note:
+ * Status terminology note (ISS-055 verified):
  * - ACP SDK (v0.15.0) ToolCallStatus = 'pending' | 'in_progress' | 'completed' | 'failed'
- * - KB 06-tools-mcp.md uses 'running' instead of 'in_progress', 'error' appears in 04-prompt-turn.md
- * - This implementation follows the SDK type definitions as the authoritative source
- *   since the SDK enforces these values at compile time.
+ * - KB 06-tools-mcp.md uses 'running' instead of 'in_progress'
+ * - SDK types confirmed as authoritative: ToolCallStatus does NOT include 'running'.
+ *   This implementation uses 'in_progress' as defined by the SDK. If the spec is updated
+ *   to align with the SDK, no code change will be needed.
  */
 export class McpToolCallBridge {
-  constructor(private readonly _getEmitter: () => ToolCallEmitter | null) {}
+  constructor(private readonly _getEmitter: (sessionId: string) => ToolCallEmitter | null) {}
 
   // -------------------------------------------------------------------------
   // makeProgressHandler
@@ -72,7 +73,7 @@ export class McpToolCallBridge {
     const activeIds = new Map<string, string[]>();
 
     return (event: AgentProgressEvent): void => {
-      const emitter = this._getEmitter();
+      const emitter = this._getEmitter(sessionId);
       if (!emitter) return;
 
       if (event.type === 'tool_start') {
@@ -93,12 +94,20 @@ export class McpToolCallBridge {
             toolCallId,
             event.toolName,
             title,
-            'other',
+            inferKind(event.toolName),
             { '_goodvibes/turn': event.turn },
           )
-          .then(() =>
-            emitter.emitToolCallUpdate(sessionId, toolCallId, 'in_progress'),
-          )
+          .then(() => {
+            // TODO(ISS-024): Permission gate — between pending and in_progress, check if
+            // this tool requires user approval (e.g. file writes, shell commands). When
+            // ISS-018 (PermissionGate wiring) is resolved, call:
+            //   const { granted } = await connection.requestPermission({ sessionId,
+            //     permission: { type: inferPermissionType(event.toolName),
+            //                   title: title, description: JSON.stringify(event.input) } })
+            //   if (!granted) { emitToolCallUpdate(sessionId, toolCallId, 'failed',
+            //     undefined, [{ type:'content', content:{ type:'text', text:'Permission denied' } }]) }
+            return emitter.emitToolCallUpdate(sessionId, toolCallId, 'in_progress');
+          })
           .catch((err: unknown) => {
             console.error('[McpToolCallBridge] error:', err);
           });
@@ -116,10 +125,9 @@ export class McpToolCallBridge {
             sessionId,
             toolCallId,
             'completed',
-            {
-              '_goodvibes/durationMs': event.durationMs,
-              '_goodvibes/content': [{ type: 'text', text: '' }],
-            },
+            { '_goodvibes/durationMs': event.durationMs },
+            // ISS-023: pass content blocks as the content parameter, not inside _meta
+            [{ type: 'content', content: { type: 'text', text: '' } }],
           )
           .catch((err: unknown) => {
             console.error('[McpToolCallBridge] error:', err);
@@ -138,10 +146,9 @@ export class McpToolCallBridge {
             sessionId,
             toolCallId,
             'failed',
-            {
-              '_goodvibes/error': event.error,
-              '_goodvibes/content': [{ type: 'text', text: String(event.error ?? 'Unknown error') }],
-            },
+            { '_goodvibes/error': event.error },
+            // ISS-023: pass content blocks as the content parameter, not inside _meta
+            [{ type: 'content', content: { type: 'text', text: String(event.error ?? 'Unknown error') } }],
           )
           .catch((err: unknown) => {
             console.error('[McpToolCallBridge] error:', err);
@@ -155,6 +162,31 @@ export class McpToolCallBridge {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Infer an ACP ToolCallKind from an MCP tool name.
+ *
+ * Maps common tool name patterns to their semantic kind so ACP clients
+ * can display appropriate icons and categorize tool operations.
+ *
+ * @param toolName - MCP tool name (may be namespaced, e.g. 'mcp__fs__read_file')
+ */
+function inferKind(toolName: string): import('@agentclientprotocol/sdk').ToolKind {
+  // Use the raw tool name part (after last '__') for keyword matching.
+  const raw = toolName.includes('__') ? toolName.split('__').pop()! : toolName;
+  const n = raw.toLowerCase();
+  if (n.includes('read') || n.includes('get'))                              return 'read';
+  if (n.includes('write') || n.includes('create') || n.includes('edit') ||
+      n.includes('update') || n.includes('patch'))                          return 'edit';
+  if (n.includes('delete') || n.includes('remove'))                        return 'delete';
+  if (n.includes('move') || n.includes('rename'))                          return 'move';
+  if (n.includes('search') || n.includes('grep') ||
+      n.includes('glob') || n.includes('find'))                            return 'search';
+  if (n.includes('exec') || n.includes('run') ||
+      n.includes('shell') || n.includes('bash'))                           return 'execute';
+  if (n.includes('fetch') || n.includes('http') || n.includes('request')) return 'fetch';
+  return 'other';
+}
 
 /**
  * Format a namespaced tool name as a human-readable title.

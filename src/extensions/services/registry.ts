@@ -110,10 +110,28 @@ export class ServiceRegistry {
     const filePath = join(this._basePath, SERVICES_FILE);
     try {
       const raw = await readFile(filePath, 'utf-8');
-      const parsed = JSON.parse(raw) as ServiceStore;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        throw new Error(`ServiceRegistry: failed to parse ${filePath}: invalid JSON`);
+      }
+      // ISS-041: Runtime validation — guard against corrupted or schema-mismatched files
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        throw new Error(
+          `ServiceRegistry: invalid store format in ${filePath}: expected an object, got ${Array.isArray(parsed) ? 'array' : typeof parsed}`,
+        );
+      }
+      const candidate = parsed as Record<string, unknown>;
+      if ('services' in candidate && !Array.isArray(candidate['services'])) {
+        throw new Error(
+          `ServiceRegistry: invalid store format in ${filePath}: 'services' must be an array`,
+        );
+      }
+      const typedCandidate = candidate as { $schema?: unknown; services?: ServiceEntry[] };
       this._store = {
-        $schema: parsed.$schema ?? SCHEMA_VERSION,
-        services: parsed.services ?? [],
+        $schema: typeof typedCandidate.$schema === 'string' ? typedCandidate.$schema : SCHEMA_VERSION,
+        services: Array.isArray(typedCandidate.services) ? typedCandidate.services : [],
       };
     } catch (err: unknown) {
       const code = (err as NodeJS.ErrnoException).code;
@@ -130,6 +148,15 @@ export class ServiceRegistry {
    * Persist the current in-memory store to disk.
    * Creates the basePath directory if it does not exist.
    * Emits `service:saved`.
+   *
+   * SECURITY WARNING (ISS-042): Service authentication credentials (bearer tokens,
+   * passwords, API keys) stored in ServiceAuth fields are written as PLAINTEXT JSON.
+   * This file should be:
+   *   - Excluded from version control (add to .gitignore)
+   *   - Protected with filesystem permissions (chmod 600 or equivalent)
+   *   - Never stored in a publicly accessible location
+   * Future improvement: encrypt sensitive fields before persisting using OS keychain,
+   * an encrypted-at-rest store, or a secrets manager (e.g., keytar, AWS Secrets Manager).
    */
   async save(): Promise<void> {
     await mkdir(this._basePath, { recursive: true });

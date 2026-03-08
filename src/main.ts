@@ -87,17 +87,21 @@ const shutdownManager = new ShutdownManager(eventBus);
 const healthCheck = new HealthCheck(eventBus);
 
 // ---------------------------------------------------------------------------
-// ToolCallEmitter — lazily assigned after conn is created
+// ToolCallEmitter — scoped per-connection to prevent cross-session data leakage
 // McpToolCallBridge — bridges AgentLoop onProgress to ACP tool_call updates
 //
-// Declared here (before L3 plugin registration) so onProgressFactory can be
-// passed to AgentSpawnerPlugin at registration time. The emitter getter is
-// lazy — it resolves to null until createConnection() sets toolCallEmitter.
+// Each connection creates its own ToolCallEmitter. Sessions are mapped to their
+// connection's emitter when created, and removed when the connection closes.
+// This prevents the last-writer-wins bug where daemon-mode connections would
+// overwrite each other's emitter reference (ISS-006).
 // ---------------------------------------------------------------------------
 
-let toolCallEmitter: InstanceType<typeof ToolCallEmitter> | null = null;
+const toolCallEmitters = new Map<string, InstanceType<typeof ToolCallEmitter>>();
 
-const mcpToolCallBridge = new McpToolCallBridge(() => toolCallEmitter);
+// Map of sessionId → AgentSideConnection for ACP session finish notifications on shutdown (ISS-004).
+const activeSessionConnections = new Map<string, InstanceType<typeof acp.AgentSideConnection>>();
+
+const mcpToolCallBridge = new McpToolCallBridge((sessionId: string) => toolCallEmitters.get(sessionId) ?? null);
 
 const onProgressFactory: OnProgressFactory = (sessionId: string) =>
   mcpToolCallBridge.makeProgressHandler(sessionId);
@@ -119,8 +123,18 @@ shutdownManager.register('project-plugin', SHUTDOWN_ORDER.L3 + 2, async () => { 
 shutdownManager.register('frontend-plugin', SHUTDOWN_ORDER.L3 + 1, async () => { await FrontendPlugin.shutdown?.(); });
 
 // L2 service teardown — ordered so dependents stop before dependencies:
-//   daemon (accepts new conns) → ipc-socket → mcp-bridge → service-registry → memory → hooks
+//   daemon (accepts new conns) → acp-sessions (finish events) → ipc-socket → mcp-bridge → service-registry → memory → hooks
 shutdownManager.register('daemon',           SHUTDOWN_ORDER.L2 + 60, () => daemonManager.stop());
+// ISS-004: Send finish events to all active ACP sessions before tearing down connections.
+shutdownManager.register('acp-sessions',     SHUTDOWN_ORDER.L2 + 55, async () => {
+  // SDK v0.15.0 SessionUpdate union does not include 'finish' yet — cast required per ACP spec
+  const finishUpdate = { sessionUpdate: 'finish', stopReason: 'cancelled' } as unknown as acp.SessionUpdate;
+  await Promise.allSettled(
+    Array.from(activeSessionConnections.entries()).map(([sessionId, sessionConn]) =>
+      sessionConn.sessionUpdate({ sessionId, update: finishUpdate }).catch(() => {}),
+    ),
+  );
+});
 shutdownManager.register('ipc-socket',       SHUTDOWN_ORDER.L2 + 50, () => ipcSocketServer.stop());
 shutdownManager.register('mcp-bridge',       SHUTDOWN_ORDER.L2 + 40, () => mcpBridge.disconnectAll());
 shutdownManager.register('service-registry', SHUTDOWN_ORDER.L2 + 30, () => serviceRegistry.save());
@@ -193,9 +207,28 @@ function createConnection(stream: AcpStream) {
     stream,
   );
 
-  // Wire toolCallEmitter to this connection (last-writer-wins in daemon mode,
-  // but each connection can have its own — set module-level for WRFC callbacks)
-  toolCallEmitter = new ToolCallEmitter(conn);
+  // Create a per-connection ToolCallEmitter (ISS-006: avoid last-writer-wins bug).
+  // Track which sessionIds belong to this connection so we can clean up on close.
+  const connEmitter = new ToolCallEmitter(conn);
+  const connSessionIds = new Set<string>();
+
+  // Map each new session created on this connection to its emitter and connection
+  // reference (ISS-004: needed to send finish events on shutdown).
+  const sessionCreatedSub = eventBus.on('session:created', (event) => {
+    const { sessionId } = event.payload as { sessionId: string };
+    connSessionIds.add(sessionId);
+    toolCallEmitters.set(sessionId, connEmitter);
+    activeSessionConnections.set(sessionId, conn);
+  });
+
+  // Clean up maps when the connection closes.
+  conn.closed.then(() => {
+    sessionCreatedSub.dispose();
+    for (const sid of connSessionIds) {
+      toolCallEmitters.delete(sid);
+      activeSessionConnections.delete(sid);
+    }
+  }).catch(() => {});
 
   const sessionAdapter = new SessionAdapter(conn, sessionManager, eventBus);
   sessionAdapter.register();
@@ -273,7 +306,7 @@ const wrfcAdapter = {
 
       // WRFC lifecycle callbacks — emit tool_call updates so ACP clients
       // can observe phase progress in real time.
-      // toolCallEmitter is lazily resolved — it is assigned after conn is created below.
+      // Emitter is resolved per-invocation from the sessionId map (ISS-006).
       callbacks: (() => {
         const ids: Record<string, string> = {};
         let attempt = 0;
@@ -284,7 +317,8 @@ const wrfcAdapter = {
               : to === 'reviewing' ? 'goodvibes_review'
               : to === 'fixing' ? 'goodvibes_fix'
               : null;
-            if (!phase || !toolCallEmitter) return;
+            const emitter = toolCallEmitters.get(params.sessionId);
+            if (!phase || !emitter) return;
             const gvPhase =
               phase === 'goodvibes_work' ? 'work'
               : phase === 'goodvibes_review' ? 'review'
@@ -296,7 +330,7 @@ const wrfcAdapter = {
               '_goodvibes/phase': gvPhase,
             };
             // Step 1: announce with status 'pending'
-            toolCallEmitter.emitToolCall(
+            emitter.emitToolCall(
               params.sessionId,
               ids[phase],
               phase,
@@ -307,8 +341,9 @@ const wrfcAdapter = {
               announceMeta,
             ).then(() => {
               // Step 2: transition to 'in_progress'
-              if (!toolCallEmitter) return;
-              return toolCallEmitter.emitToolCallUpdate(
+              const em2 = toolCallEmitters.get(params.sessionId);
+              if (!em2) return;
+              return em2.emitToolCallUpdate(
                 params.sessionId,
                 ids[phase],
                 'in_progress',
@@ -318,8 +353,9 @@ const wrfcAdapter = {
           },
           onWorkComplete: () => {
             const id = ids['goodvibes_work'];
-            if (!id || !toolCallEmitter) return;
-            toolCallEmitter.emitToolCallUpdate(
+            const emitter = toolCallEmitters.get(params.sessionId);
+            if (!id || !emitter) return;
+            emitter.emitToolCallUpdate(
               params.sessionId,
               id,
               'completed',
@@ -328,7 +364,8 @@ const wrfcAdapter = {
           },
           onReviewComplete: (result) => {
             const id = ids['goodvibes_review'];
-            if (!id || !toolCallEmitter) return;
+            const emitter = toolCallEmitters.get(params.sessionId);
+            if (!id || !emitter) return;
             const reviewMeta: Record<string, unknown> = {
               '_goodvibes/score': result.score,
               '_goodvibes/minimumScore': wrfcConfig.minReviewScore,
@@ -338,7 +375,7 @@ const wrfcAdapter = {
             if (result.dimensions) {
               reviewMeta['_goodvibes/dimensions'] = result.dimensions;
             }
-            toolCallEmitter.emitToolCallUpdate(
+            emitter.emitToolCallUpdate(
               params.sessionId,
               id,
               'completed',
@@ -347,8 +384,9 @@ const wrfcAdapter = {
           },
           onFixComplete: () => {
             const id = ids['goodvibes_fix'];
-            if (!id || !toolCallEmitter) return;
-            toolCallEmitter.emitToolCallUpdate(
+            const emitter = toolCallEmitters.get(params.sessionId);
+            if (!id || !emitter) return;
+            emitter.emitToolCallUpdate(
               params.sessionId,
               id,
               'completed',
@@ -393,7 +431,9 @@ async function shutdown(signal: string): Promise<void> {
   console.error(`[goodvibes-acp] Received ${signal}, shutting down...`);
   healthCheck.markShuttingDown();
   await shutdownManager.shutdown();
-  process.exit(0);
+  // Allow the event loop to drain pending I/O (e.g. finish event socket writes)
+  // before forcing exit. The process exits naturally once all handles close.
+  setTimeout(() => process.exit(0), 2000).unref();
 }
 
 process.on('SIGINT', () => shutdown('SIGINT'));
@@ -401,12 +441,16 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 process.on('uncaughtException', (err) => {
   console.error('[goodvibes-acp] Uncaught exception:', err);
-  process.exit(1);
+  // Safety timeout — ensures exit even if shutdown hangs
+  setTimeout(() => process.exit(1), 5000).unref();
+  shutdownManager.shutdown().finally(() => process.exit(1));
 });
 
 process.on('unhandledRejection', (reason) => {
   console.error('[goodvibes-acp] Unhandled rejection:', reason);
-  process.exit(1);
+  // Safety timeout — ensures exit even if shutdown hangs
+  setTimeout(() => process.exit(1), 5000).unref();
+  shutdownManager.shutdown().finally(() => process.exit(1));
 });
 
 // ---------------------------------------------------------------------------

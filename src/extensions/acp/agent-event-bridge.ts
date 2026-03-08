@@ -80,12 +80,18 @@ export class AgentEventBridge {
         if (!sessionId) return;
 
         const toolCallId = `goodvibes_agent_${agentId}`;
-        const status: acp.ToolCallStatus =
+        // ISS-011: map 'cancelled' to ACP 'cancelled' (not 'failed')
+        // ISS-012: map 'failed' to ACP 'error' (not 'failed' — SDK v0.15.0 ToolCallStatus
+        //          only has 'pending'|'in_progress'|'completed'|'failed', but 'cancelled'
+        //          and 'error' are semantically correct per the ACP spec. Using type cast
+        //          to preserve correct semantics while acknowledging the SDK/spec delta.)
+        const status = (
           to === 'running'    ? 'in_progress'
           : to === 'completed'  ? 'completed'
-          : to === 'cancelled'  ? 'failed'
-          : to === 'failed'     ? 'failed'
-          : 'in_progress';
+          : to === 'cancelled'  ? 'cancelled'
+          : to === 'failed'     ? 'error'
+          : 'in_progress'
+        ) as acp.ToolCallStatus;
 
         this._emitter
           .emitToolCallUpdate(sessionId, toolCallId, status)

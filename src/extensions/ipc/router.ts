@@ -16,6 +16,10 @@ import {
 } from './protocol.js';
 import type { IpcRequest, IpcResponse } from './protocol.js';
 
+// JSON-RPC 2.0 standard error codes
+const RPC_METHOD_NOT_FOUND = -32601;
+const RPC_INTERNAL_ERROR = -32603;
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -43,8 +47,6 @@ export type IpcHandler = (
 export class IpcRouter {
   private readonly _eventBus: EventBus;
   private readonly _handlers = new Map<string, IpcHandler>();
-  private _idCounter = 0;
-
   constructor(eventBus: EventBus) {
     this._eventBus = eventBus;
     this._registerBuiltIns();
@@ -77,24 +79,21 @@ export class IpcRouter {
    */
   async route(request: IpcRequest): Promise<IpcResponse> {
     const handler = this._handlers.get(request.method);
-    const responseId = this._nextId();
 
     if (!handler) {
       return buildResponse(
-        responseId,
         request.id,
-        false,
         null,
-        `Unknown method: ${request.method}`,
+        { code: RPC_METHOD_NOT_FOUND, message: `Unknown method: ${request.method}` },
       );
     }
 
     try {
       const result = await handler(request);
-      return buildResponse(responseId, request.id, true, result);
+      return buildResponse(request.id, result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return buildResponse(responseId, request.id, false, null, message);
+      return buildResponse(request.id, null, { code: RPC_INTERNAL_ERROR, message });
     }
   }
 
@@ -103,11 +102,10 @@ export class IpcRouter {
   // ---------------------------------------------------------------------------
 
   private _registerBuiltIns(): void {
-    // ping → pong: echo the payload back
+    // ping → pong: echo the params back
     this.register('ping', (req) => ({
       pong: true,
-      echo: req.payload,
-      timestamp: Date.now(),
+      echo: req.params,
     }));
 
     // status → runtime status snapshot
@@ -116,11 +114,6 @@ export class IpcRouter {
       uptime: process.uptime(),
       memoryUsage: process.memoryUsage(),
       handlerCount: this._eventBus.handlerCount,
-      timestamp: Date.now(),
     }));
-  }
-
-  private _nextId(): string {
-    return `ipc_r_${Date.now()}_${++this._idCounter}`;
   }
 }

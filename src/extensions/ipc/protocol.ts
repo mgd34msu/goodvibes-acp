@@ -7,24 +7,36 @@
  * Message format: newline-delimited JSON (NDJSON) over Unix domain sockets.
  * Every message is a JSON object followed by a '\n' delimiter.
  *
- * Request/response correlation is handled via a shared `id` field.
- * Responses reference the originating request `id` in the `correlationId` field.
+ * Follows JSON-RPC 2.0 conventions for request/response correlation:
+ * - Responses carry the same `id` as the originating request.
+ * - Notifications omit `id` entirely (fire-and-forget).
+ * - Error responses use a structured error object with `code` and `message`.
  */
 
 // ---------------------------------------------------------------------------
 // Wire types
 // ---------------------------------------------------------------------------
 
+/** Structured error object per JSON-RPC 2.0 */
+export interface IpcError {
+  /** Numeric error code (e.g. -32700 parse error, -32601 method not found) */
+  code: number;
+  /** Human-readable error description */
+  message: string;
+  /** Optional additional error context */
+  data?: unknown;
+}
+
 /** A single IPC message flowing over the wire */
 export interface IpcMessage {
+  /** JSON-RPC 2.0 version string — always '2.0' */
+  jsonrpc: '2.0';
   /** Discriminant — message category (e.g. 'request', 'response', 'notification') */
   type: string;
   /** Unique message identifier (monotonic counter or cuid) */
   id: string;
-  /** Arbitrary message payload */
-  payload: unknown;
-  /** Unix timestamp (ms) when this message was created */
-  timestamp: number;
+  /** Optional metadata (e.g. timestamp) */
+  _meta?: { timestamp?: number };
 }
 
 /** An IPC request — expects a correlated IpcResponse */
@@ -32,24 +44,30 @@ export interface IpcRequest extends IpcMessage {
   type: 'request';
   /** The named operation to invoke (e.g. 'ping', 'status') */
   method: string;
+  /** Arbitrary request payload */
+  params: unknown;
 }
 
-/** An IPC response — correlates to an IpcRequest */
-export interface IpcResponse extends IpcMessage {
+/** An IPC response — id matches the originating IpcRequest id */
+export interface IpcResponse {
+  /** JSON-RPC 2.0 version string — always '2.0' */
+  jsonrpc: '2.0';
   type: 'response';
-  /** ID of the IpcRequest this response answers */
-  correlationId: string;
-  /** true if the operation succeeded */
-  ok: boolean;
-  /** Error message if ok === false */
-  error?: string;
+  /** ID copied from the originating IpcRequest; null for parse errors */
+  id: string | null;
+  /** Result payload on success (mutually exclusive with error) */
+  result?: unknown;
+  /** Structured error on failure (mutually exclusive with result) */
+  error?: IpcError;
 }
 
-/** A one-way IPC notification (no response expected) */
-export interface IpcNotification extends IpcMessage {
+/** A one-way IPC notification (no response expected, no id) */
+export interface IpcNotification extends Omit<IpcMessage, 'id'> {
   type: 'notification';
   /** The event name (e.g. 'runtime:status-changed') */
   event: string;
+  /** Arbitrary notification payload */
+  params: unknown;
 }
 
 // ---------------------------------------------------------------------------
@@ -60,7 +78,7 @@ export interface IpcNotification extends IpcMessage {
  * Serialize an IPC message to a newline-delimited JSON string suitable for
  * sending over a Unix socket.
  */
-export function serializeMessage(message: IpcMessage): string {
+export function serializeMessage(message: IpcMessage | IpcResponse | IpcNotification): string {
   return JSON.stringify(message) + '\n';
 }
 
@@ -78,21 +96,22 @@ export function deserializeMessage(line: string): IpcMessage {
   if (
     typeof parsed !== 'object' ||
     parsed === null ||
-    typeof rec.type !== 'string' ||
-    typeof rec.id !== 'string' ||
-    typeof rec.timestamp !== 'number'
+    rec.jsonrpc !== '2.0' ||
+    typeof rec.type !== 'string'
   ) {
     throw new TypeError(
-      'IPC message missing required fields: type (string), id (string), timestamp (number)',
+      'IPC message missing required fields: jsonrpc ("2.0"), type (string)',
     );
+  }
+
+  // Notifications do not have an id
+  if (rec.type !== 'notification' && typeof rec.id !== 'string') {
+    throw new TypeError('IPC request/response message missing required field: id (string)');
   }
 
   // Additional structural validation per message type
   if (rec.type === 'request' && typeof rec.method !== 'string') {
     throw new TypeError('IPC request message missing required field: method (string)');
-  }
-  if (rec.type === 'response' && typeof rec.correlationId !== 'string') {
-    throw new TypeError('IPC response message missing required field: correlationId (string)');
   }
   if (rec.type === 'notification' && typeof rec.event !== 'string') {
     throw new TypeError('IPC notification message missing required field: event (string)');
@@ -107,51 +126,53 @@ export function deserializeMessage(line: string): IpcMessage {
 export function buildRequest(
   id: string,
   method: string,
-  payload: unknown = null,
+  params: unknown = null,
 ): IpcRequest {
   return {
+    jsonrpc: '2.0',
     type: 'request',
     id,
     method,
-    payload,
-    timestamp: Date.now(),
+    params,
   };
 }
 
 /**
  * Build a well-formed IpcResponse.
+ *
+ * @param id      The request id to correlate; null for parse-error responses.
+ * @param result  The success payload (pass null on error).
+ * @param error   Structured error object; if provided, result is omitted.
  */
 export function buildResponse(
-  id: string,
-  correlationId: string,
-  ok: boolean,
-  payload: unknown = null,
-  error?: string,
+  id: string | null,
+  result: unknown = null,
+  error?: IpcError,
 ): IpcResponse {
-  return {
+  const response: IpcResponse = {
+    jsonrpc: '2.0',
     type: 'response',
     id,
-    correlationId,
-    ok,
-    payload,
-    error,
-    timestamp: Date.now(),
   };
+  if (error) {
+    response.error = error;
+  } else {
+    response.result = result;
+  }
+  return response;
 }
 
 /**
  * Build a well-formed IpcNotification.
  */
 export function buildNotification(
-  id: string,
   event: string,
-  payload: unknown = null,
+  params: unknown = null,
 ): IpcNotification {
   return {
+    jsonrpc: '2.0',
     type: 'notification',
-    id,
     event,
-    payload,
-    timestamp: Date.now(),
+    params,
   };
 }

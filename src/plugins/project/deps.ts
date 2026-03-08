@@ -108,8 +108,20 @@ export class DependencyAnalyzer {
   /**
    * Reads package.json, detects circular imports, unused deps, and outdated packages.
    * Never throws — returns partial results with empty arrays on errors.
+   *
+   * @param projectRoot - Absolute path to the project root
+   * @param options - Optional flags to control which analyses are run
+   *   - `checkOutdated` (default: false) — check for outdated packages
+   *   - `detectCircular` (default: true) — detect circular imports
+   *   - `findUnused` (default: true) — find unused dependencies
    */
-  async analyze(projectRoot: string): Promise<DepsAnalysis> {
+  async analyze(
+    projectRoot: string,
+    options?: { checkOutdated?: boolean; detectCircular?: boolean; findUnused?: boolean }
+  ): Promise<DepsAnalysis> {
+    const runCircular = options?.detectCircular !== false;
+    const runUnused = options?.findUnused !== false;
+    const runOutdated = options?.checkOutdated === true;
     const pkgPath = join(projectRoot, 'package.json');
     const pkg = await readJson(pkgPath, this._fs);
 
@@ -132,9 +144,10 @@ export class DependencyAnalyzer {
       }
     }
 
-    const [circular, unused] = await Promise.all([
-      this.findCircular(projectRoot),
-      this.findUnused(projectRoot),
+    const [circular, unused, outdated] = await Promise.all([
+      runCircular ? this.findCircular(projectRoot) : Promise.resolve([] as string[][]),
+      runUnused ? this.findUnused(projectRoot) : Promise.resolve([] as string[]),
+      runOutdated ? this.checkOutdated(projectRoot) : Promise.resolve([] as import('./types.js').Dependency[]),
     ]);
 
     return {
@@ -142,7 +155,7 @@ export class DependencyAnalyzer {
       devDependencies,
       circular,
       unused,
-      outdated: [],
+      outdated,
     };
   }
 

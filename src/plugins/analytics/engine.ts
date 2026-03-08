@@ -16,6 +16,8 @@ import type {
   TokenBudget,
   AnalyticsStore,
   ConfigParams,
+  GoodVibesAnalyticsRequest,
+  GoodVibesAnalyticsResponse,
 } from './types.js';
 import { BudgetTracker } from './budget.js';
 import { AnalyticsDashboard } from './dashboard.js';
@@ -251,26 +253,20 @@ export class AnalyticsEngine {
   // ---------------------------------------------------------------------------
 
   /**
-   * Build a GoodVibesAnalyticsResponse-shaped summary for a session (or all sessions).
+   * Build a GoodVibesAnalyticsResponse for an analytics request.
    *
-   * @param sessionId - Optional session to scope the response. If omitted, aggregates
-   *   across all sessions in the store.
+   * Supports session, workflow, and agent scopes per the ACP `_goodvibes/analytics`
+   * wire format (KB-08 lines 306-324). Workflow and agent scopes currently fall back
+   * to session-level data since per-workflow/agent tracking is not yet implemented.
+   *
+   * @param request - Analytics request with sessionId, scope, and optional id.
+   *   Accepts a plain `{ sessionId?: string }` object for backwards compatibility.
    * @returns Token usage totals, turn count, agent count, and wall-clock duration.
    */
   getAnalyticsResponse(
-    sessionId?: string
-  ): {
-    tokenUsage: {
-      input: number;
-      output: number;
-      total: number;
-      budget?: number;
-      remaining?: number;
-    };
-    turnCount: number;
-    agentCount: number;
-    duration_ms: number;
-  } {
+    request?: GoodVibesAnalyticsRequest | { sessionId?: string }
+  ): GoodVibesAnalyticsResponse {
+    const sessionId = request?.sessionId;
     if (sessionId) {
       const session = this._store.sessions.get(sessionId);
       const budget = this._store.budgets.get(sessionId);

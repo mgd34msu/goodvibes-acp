@@ -12,7 +12,7 @@
 // ---------------------------------------------------------------------------
 
 /** The action a directive instructs the runtime to take */
-export type DirectiveAction = 'spawn' | 'complete' | 'escalate' | 'fix' | 'review';
+export type DirectiveAction = 'spawn' | 'complete' | 'escalate' | 'fix' | 'review' | 'cancel';
 
 // ---------------------------------------------------------------------------
 // Directive priority

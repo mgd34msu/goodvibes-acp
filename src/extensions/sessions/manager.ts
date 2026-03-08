@@ -15,6 +15,7 @@ import type {
   HistoryMessage,
   MCPServerConfig,
 } from '../../types/session.js';
+import type { SessionConfigOption } from '../../types/config.js';
 import { StateStore } from '../../core/state-store.js';
 import { EventBus } from '../../core/event-bus.js';
 
@@ -269,7 +270,7 @@ export class SessionManager {
     sessionId: string,
     key: string,
     value: string,
-  ): Promise<Record<string, string>> {
+  ): Promise<SessionConfigOption[]> {
     const stored = this._requireStored(sessionId);
 
     const updatedOptions: Record<string, string> = {
@@ -289,7 +290,19 @@ export class SessionManager {
 
     this._bus.emit('session:config-changed', { sessionId, key, value });
 
-    return updatedOptions;
+    // Build the full ConfigOption[] wire format from the flat key-value store.
+    // The agent layer's buildConfigOptions() in config-adapter.ts has richer
+    // metadata (names, choices); this returns a minimal representation for
+    // the ACP SetSessionConfigOption response (spec: configOptions array with
+    // id + currentValue per option).
+    return Object.entries(updatedOptions).map(([id, currentValue]) => ({
+      id,
+      name: id,
+      category: 'session',
+      type: 'text' as const,
+      currentValue,
+      options: [],
+    }));
   }
 
   // -------------------------------------------------------------------------

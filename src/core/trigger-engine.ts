@@ -188,6 +188,15 @@ export class TriggerEngine {
         continue;
       }
 
+      // Check declarative payload match (definition.match)
+      if (definition.match) {
+        const payload = event.payload as Record<string, unknown>;
+        const matches = Object.entries(definition.match).every(
+          ([key, value]) => payload?.[key] === value
+        );
+        if (!matches) continue;
+      }
+
       // Check payload condition
       if (definition.condition && !definition.condition(event)) {
         continue;
@@ -217,11 +226,14 @@ export class TriggerEngine {
 
       handler.execute(definition, context).catch((err: unknown) => {
         // Emit error to bus but don't crash the engine
+        // Custom fields go in _meta per KB-08 extensibility rules (no root-level custom fields)
         this._eventBus.emit('error', {
-          source: 'trigger-engine',
-          triggerId: definition.id,
-          error: err instanceof Error ? err : new Error(String(err)),
-          timestamp: Date.now(),
+          _meta: {
+            '_goodvibes/source': 'trigger-engine',
+            '_goodvibes/triggerId': definition.id,
+            '_goodvibes/error': err instanceof Error ? err.message : String(err),
+            '_goodvibes/timestamp': Date.now(),
+          },
         });
       });
     }

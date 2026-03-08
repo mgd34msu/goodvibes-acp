@@ -76,15 +76,15 @@ export type RuntimeConfig = {
 export type SessionConfigOptionChoice = {
   /** Machine value */
   value: string;
-  /** Human-readable name */
-  name: string;
+  /** Human-readable display label (ACP spec: `label?: string`) */
+  label?: string;
   /** Optional description */
   description?: string;
 };
 
 /**
  * Type of the config option control.
- * @remarks ACP wire only supports 'select'. 'boolean' and 'text' are GoodVibes extensions serialized as 'select' on the wire.
+ * @remarks All three types are natively supported by the ACP spec (KB-01 line 301).
  */
 export type SessionConfigOptionType = 'select' | 'boolean' | 'text';
 

@@ -17,7 +17,7 @@ import { REVIEW_DIMENSIONS, computeWeightedScore } from './scoring.js';
 // ---------------------------------------------------------------------------
 
 export type CodeReviewerOptions = {
-  /** Minimum score to pass (0–10). Default: 9.5 */
+  /** Minimum score to pass (0–10). Default: 7.0 */
   minScore?: number;
 };
 
@@ -40,7 +40,7 @@ export class CodeReviewer implements IReviewer {
   private readonly minScore: number;
 
   constructor(options?: CodeReviewerOptions) {
-    this.minScore = options?.minScore ?? 9.5;
+    this.minScore = options?.minScore ?? 7.0;
   }
 
   /**

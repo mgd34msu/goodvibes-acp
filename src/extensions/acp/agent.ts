@@ -88,8 +88,17 @@ function toStopReason(err: unknown): schema.PromptResponse['stopReason'] | null 
   return null;
 }
 
+/**
+ * Build a typed session_info_update SessionUpdate.
+ * Uses 'session_info_update' discriminator per ACP SDK (SDK type: SessionInfoUpdate).
+ * The ACP spec prose may reference 'session_info' but the SDK union discriminator is 'session_info_update'.
+ */
 function sessionInfoUpdate(title: string): schema.SessionUpdate {
-  return { sessionUpdate: 'session_info' as any, content: { type: 'text', text: title } as any } as schema.SessionUpdate;
+  const update: schema.SessionInfoUpdate & { sessionUpdate: 'session_info_update' } = {
+    sessionUpdate: 'session_info_update',
+    title,
+  };
+  return update;
 }
 
 // ---------------------------------------------------------------------------
@@ -204,13 +213,16 @@ export class GoodVibesAgent implements Agent {
       authMethods: [],
       agentCapabilities: {
         loadSession: true,
+        // NOTE: SDK field name is `mcpCapabilities` (schema.AgentCapabilities line 27).
+        // ACP spec prose uses `mcp` but the TypeScript SDK type uses `mcpCapabilities`.
         mcpCapabilities: { http: false, sse: false },
         promptCapabilities: {
           embeddedContext: true,
           image: false,
           audio: false,
         },
-        // ISS-030: Advertise session capabilities (all unstable features disabled)
+        // ISS-030: Advertise session capabilities (all unstable features disabled).
+        // SDK type: fork/list/resume are `XxxCapabilities | null` — null means not supported.
         sessionCapabilities: {
           fork: null,
           list: null,
@@ -316,7 +328,12 @@ export class GoodVibesAgent implements Agent {
       } as schema.SessionUpdate,
     });
 
-    return null as any;
+    return {
+      configOptions: buildConfigOptions(
+        modeFromConfigValue(context.config.mode),
+        context.config.model,
+      ),
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -459,10 +476,11 @@ export class GoodVibesAgent implements Agent {
   async setSessionMode(params: schema.SetSessionModeRequest): Promise<void> {
     await this.sessions.setMode(params.sessionId, modeFromConfigValue(params.modeId));
 
-    // ISS-011: Emit current_mode session update per ACP spec
+    // ISS-011: Emit current_mode_update session update per ACP spec
+    // SDK discriminator: 'current_mode_update'; field: currentModeId (schema.CurrentModeUpdate)
     await this.conn.sessionUpdate({
       sessionId: params.sessionId,
-      update: { sessionUpdate: 'current_mode' as any, currentModeId: params.modeId } as schema.SessionUpdate,
+      update: { sessionUpdate: 'current_mode_update', currentModeId: params.modeId },
     }).catch(() => {});
   }
 

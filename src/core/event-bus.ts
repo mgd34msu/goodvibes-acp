@@ -23,6 +23,8 @@ export interface EventRecord<TPayload = unknown> {
   readonly timestamp: number;
   /** Session ID if event is session-scoped (optional) */
   readonly sessionId?: string;
+  /** Optional extensibility metadata — W3C trace context, vendor-specific fields, etc. */
+  readonly _meta?: Record<string, unknown>;
 }
 
 /** Handler function for an event */

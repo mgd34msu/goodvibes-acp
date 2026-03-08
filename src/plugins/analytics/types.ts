@@ -144,6 +144,39 @@ export type ConfigParams = {
   storageDir?: string;
 };
 
+// ---------------------------------------------------------------------------
+// ACP Wire-format types (KB-08 extensibility, lines 306-324)
+// ---------------------------------------------------------------------------
+
+/**
+ * ACP wire-format request for the `_goodvibes/analytics` extension method.
+ * Defines the contract between client and agent for analytics queries.
+ */
+export type GoodVibesAnalyticsRequest = {
+  /** Session to query */
+  sessionId: string;
+  /** Scope of the analytics query */
+  scope: 'session' | 'workflow' | 'agent';
+  /** Workflow or agent ID when scope is not 'session' */
+  id?: string;
+};
+
+/**
+ * ACP wire-format response for the `_goodvibes/analytics` extension method.
+ */
+export type GoodVibesAnalyticsResponse = {
+  tokenUsage: {
+    input: number;
+    output: number;
+    total: number;
+    budget?: number;
+    remaining?: number;
+  };
+  turnCount: number;
+  agentCount: number;
+  duration_ms: number;
+};
+
 /** Shared in-memory analytics store — passed to sub-components */
 export type AnalyticsStore = {
   /** Sessions keyed by sessionId */

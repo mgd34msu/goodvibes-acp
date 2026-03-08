@@ -51,7 +51,15 @@ export interface AuthOrchestratorOptions {
 /**
  * Handles outbound authentication to external services (API keys, tokens).
  * NOT the same as ACP inbound client authentication (which uses authMethods/authenticate).
- * TODO: Wire into runtime via service index, or remove if not needed.
+ *
+ * STATUS: Not yet integrated with ACP (ISS-039).
+ * This class is fully implemented but is not wired to any ACP extension method
+ * or runtime path. It is exported for future use.
+ *
+ * To integrate: create a `_goodvibes/auth` extension method handler and
+ * instantiate this class in the runtime:
+ *   case '_goodvibes/auth':
+ *     return authOrchestrator.authenticate(serviceName);
  *
  * Builds auth credentials from a ServiceConfig and emits events on
  * success or failure. Supports bearer, basic, and api-key strategies.

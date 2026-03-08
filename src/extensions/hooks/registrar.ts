@@ -15,6 +15,7 @@ import {
   emitSessionDestroyed,
   type HookContext,
 } from './built-ins.js';
+import type { PermissionGate } from '../acp/permission-gate.js';
 
 /**
  * HookRegistrar pre-registers all GoodVibes-specific hooks into the HookEngine at startup.
@@ -28,10 +29,17 @@ import {
 export class HookRegistrar {
   private readonly _hookEngine: HookEngine;
   private readonly _eventBus: EventBus;
+  private readonly _permissionGate: PermissionGate | undefined;
 
-  constructor(hookEngine: HookEngine, eventBus: EventBus) {
+  /**
+   * @param hookEngine - The hook engine to register hooks into
+   * @param eventBus - Event bus for emitting lifecycle events
+   * @param permissionGate - Optional PermissionGate instance for tool execution gating (ISS-018)
+   */
+  constructor(hookEngine: HookEngine, eventBus: EventBus, permissionGate?: PermissionGate) {
     this._hookEngine = hookEngine;
     this._eventBus = eventBus;
+    this._permissionGate = permissionGate;
   }
 
   /**
@@ -46,17 +54,28 @@ export class HookRegistrar {
    * - session:destroy post — emits session:destroyed event
    */
   registerBuiltins(): void {
-    const { _hookEngine: engine, _eventBus: bus } = this;
+    const { _hookEngine: engine, _eventBus: bus, _permissionGate: permissionGate } = this;
 
     // agent:spawn — pre: validate config
+    // ISS-070: Sets _meta._abort: true and _meta._validationError on invalid configs.
+    // Callers that invoke engine.execute('agent:spawn', ...) should check the returned
+    // context for _meta._abort === true and abort the operation before proceeding.
     engine.register(
       'agent:spawn',
       'pre',
       (context: Record<string, unknown>) => {
         const validation = validateAgentConfig(context as HookContext);
         if (!validation.proceed) {
-          // Return context with validation error metadata; engine continues
-          return { ...context, _validationError: validation.reason };
+          // Store under _meta (ISS-019) and signal abort for callers to check (ISS-070)
+          const existingMeta = (context._meta as Record<string, unknown> | undefined) ?? {};
+          return {
+            ...context,
+            _meta: {
+              ...existingMeta,
+              _validationError: validation.reason,
+              _abort: true,
+            },
+          };
         }
         return context;
       }
@@ -107,24 +126,76 @@ export class HookRegistrar {
       }
     );
 
-    // tool:execute — pre: permission check placeholder
+    // tool:execute — pre: permission check (ISS-018, ISS-021)
+    // Calls PermissionGate.check() when a gate is wired in. If permission is denied,
+    // sets _meta._permissionDenied: true on the context. Callers should check this
+    // flag and abort the tool call, emitting tool_call_update(status: 'failed').
     engine.register(
       'tool:execute',
       'pre',
       async (context: Record<string, unknown>) => {
-        // TODO: Wire PermissionGate.check() here when permission system is activated
-        // For now, always allow (no permission gate instantiated yet — see ISS-015)
-        return { ...context, _permissionChecked: true };
+        const existingMeta = (context._meta as Record<string, unknown> | undefined) ?? {};
+        if (permissionGate) {
+          // Build a PermissionRequest from the hook context
+          const toolName = (context.toolName as string | undefined) ?? 'unknown';
+          const permResult = await permissionGate.check({
+            type: (context.permissionType as string | undefined) ?? 'mcp',
+            toolCallId: context.toolCallId as string | undefined,
+            toolName,
+            title: `Execute tool: ${toolName}`,
+            description: `Allow tool invocation: ${toolName}`,
+            _meta: existingMeta,
+          });
+          if (!permResult.granted) {
+            console.warn(
+              `[HookRegistrar] Permission denied for tool '${toolName}':`,
+              permResult.reason
+            );
+            return {
+              ...context,
+              _meta: {
+                ...existingMeta,
+                _permissionDenied: true,
+                _permissionReason: permResult.reason,
+              },
+            };
+          }
+          return {
+            ...context,
+            _meta: { ...existingMeta, _permissionChecked: true },
+          };
+        }
+        // No permission gate wired — log advisory and pass through
+        // (ISS-015: PermissionGate not yet instantiated at construction time)
+        console.warn(
+          '[HookRegistrar] tool:execute pre-hook: no PermissionGate wired — skipping permission check'
+        );
+        return {
+          ...context,
+          _meta: { ...existingMeta, _permissionChecked: false, _permissionGateMissing: true },
+        };
       },
       100
     );
 
-    // tool:execute — post: completion tracker placeholder
+    // tool:execute — post: emit tool_call_update (ISS-071)
+    // Emits a 'tool:call:update' event on the EventBus with the completion status
+    // and result, per ACP spec KB-05 step 6 and KB-06 tool_call_update schema.
     engine.register(
       'tool:execute',
       'post',
-      async (_context: Record<string, unknown>, _result: unknown) => {
-        // TODO: Emit tool_call_update with completion status
+      (context: Record<string, unknown>, result: unknown) => {
+        const toolCallId = context.toolCallId as string | undefined;
+        const toolName = (context.toolName as string | undefined) ?? 'unknown';
+        const meta = (context._meta as Record<string, unknown> | undefined) ?? {};
+        const failed = Boolean(meta._permissionDenied);
+        bus.emit('tool:call:update', {
+          toolCallId,
+          toolName,
+          status: failed ? 'failed' : 'completed',
+          output: result ?? null,
+          reason: failed ? (meta._permissionReason as string | undefined) : undefined,
+        });
       },
       100
     );

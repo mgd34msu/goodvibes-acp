@@ -6,7 +6,7 @@
  * and provides a unified interface for spawning, awaiting, and cancelling agents.
  *
  * The actual agent spawner (L3) is resolved at call-time from the Registry
- * under the well-known key `'agent-spawner'`, keeping L2 free of L3 imports.
+ * under the well-known key `'agent_spawner'`, keeping L2 free of L3 imports.
  */
 
 import type { AgentConfig, AgentHandle, AgentResult, AgentStatus } from '../../types/agent.js';
@@ -20,7 +20,7 @@ import { AgentTracker } from './tracker.js';
 const DEFAULT_MAX_PARALLEL = 6;
 
 /** Registry key used to look up the L3 IAgentSpawner implementation. */
-const AGENT_SPAWNER_KEY = 'agent-spawner';
+const AGENT_SPAWNER_KEY = 'agent_spawner';
 
 /** Options accepted by the AgentCoordinator constructor. */
 export interface AgentCoordinatorOptions {

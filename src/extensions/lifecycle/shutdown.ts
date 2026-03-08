@@ -119,25 +119,4 @@ export class ShutdownManager {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // ACP session cleanup
-  // ---------------------------------------------------------------------------
-
-  /**
-   * TODO (ISS-074): Register an L2 handler that closes active ACP sessions on shutdown.
-   *
-   * When an in-flight ACP prompt is interrupted by shutdown, the runtime should
-   * send a `finish` event with `stopReason: 'cancelled'` for each active session
-   * before the process exits. This requires access to the ACP session registry
-   * (e.g. via the EventBus or a direct registry reference) and should be
-   * registered at SHUTDOWN_ORDER.L2 (200) so it runs after L3 plugins but
-   * before L1 core teardown.
-   *
-   * Example registration point:
-   *   shutdownManager.register('acp-sessions', SHUTDOWN_ORDER.L2, async () => {
-   *     for (const session of acpSessionRegistry.activeSessions()) {
-   *       await session.finish({ stopReason: 'cancelled' });
-   *     }
-   *   });
-   */
 }

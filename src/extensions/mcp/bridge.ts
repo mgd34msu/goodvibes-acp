@@ -221,12 +221,23 @@ export class McpBridge {
     }
 
     // HTTP/SSE: not supported yet — log a warning and skip gracefully.
+    //
+    // @limitation Only stdio MCP servers are supported in this implementation.
+    //   HTTP and SSE transports are silently skipped (ISS-072). The ACP client
+    //   receives no structured notification about the skipped server.
+    //
+    //   Future work:
+    //   1. Emit an `mcp:error` event so the session layer can notify the ACP client.
+    //   2. Declare `mcp: { http: false, sse: false }` in agentCapabilities during
+    //      `initialize` so the client knows the limitation upfront.
+    //
     // NOTE: Agent capability declaration (`mcp: { http: false, sse: false }`) should
     // be added to the agent descriptor in src/extensions/acp/agent.ts once that
     // field is part of the ACP capability schema.
     // NOTE: console.error is intentional here — this runs during MCP bridge bootstrap,
     // before a structured logger is available.
     console.error(`[MCP] Skipping non-stdio server "${server.name}": HTTP/SSE transport not yet supported`);
+    this.eventBus.emit('mcp:error', { serverId: server.name, error: 'HTTP/SSE transport not supported' });
     return null;
   }
 

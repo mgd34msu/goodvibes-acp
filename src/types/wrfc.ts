@@ -26,7 +26,8 @@ export type WRFCState =
   | 'checking'
   | 'complete'
   | 'escalated'
-  | 'failed';
+  | 'failed'
+  | 'cancelled';
 
 // ---------------------------------------------------------------------------
 // WRFC transitions

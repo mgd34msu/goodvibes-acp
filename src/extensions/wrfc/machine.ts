@@ -39,6 +39,8 @@ export const WRFC_EVENTS = {
   CHECK_ESCALATE: 'check-escalate',
   /** Force transition to failed from any non-terminal state */
   FAIL: 'fail',
+  /** Cancel the chain — user-initiated abort */
+  CANCEL: 'cancel',
 } as const;
 
 export type WRFCEvent = (typeof WRFC_EVENTS)[keyof typeof WRFC_EVENTS];
@@ -51,6 +53,7 @@ export const WRFC_TERMINAL_STATES: ReadonlySet<WRFCState> = new Set<WRFCState>([
   'complete',
   'escalated',
   'failed',
+  'cancelled',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -91,6 +94,7 @@ export function createWRFCMachine(
       complete: {},
       escalated: {},
       failed: {},
+      cancelled: {},
     },
 
     transitions: [
@@ -192,6 +196,14 @@ export function createWRFCMachine(
         from: ['idle', 'working', 'reviewing', 'fixing', 'checking'],
         to: 'failed',
         event: WRFC_EVENTS.FAIL,
+      },
+      // -----------------------------------------------------------------------
+      // Cancel — user-initiated abort from any non-terminal state
+      // -----------------------------------------------------------------------
+      {
+        from: ['idle', 'working', 'reviewing', 'fixing', 'checking'],
+        to: 'cancelled',
+        event: WRFC_EVENTS.CANCEL,
       },
     ],
 

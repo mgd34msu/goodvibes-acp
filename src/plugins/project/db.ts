@@ -19,8 +19,12 @@ import type { DbSchema, TableInfo, ColumnInfo, IndexInfo, Relation, SchemaAnalys
  * Returns an empty schema on parse errors.
  *
  * @note Uses direct `node:fs/promises` calls rather than the ITextFileAccess
- * abstraction used elsewhere in the project. If testability via mock file
- * access becomes a requirement, consider injecting ITextFileAccess here.
+ * abstraction used by DependencyAnalyzer, SecurityScanner, and TestAnalyzer.
+ * This means DatabaseTools reads stale disk state instead of unsaved editor
+ * buffers (ISS-051). To fix: add ITextFileAccess as a constructor parameter,
+ * replace readFile() with this._fileAccess.readFile(), remove the fs/promises
+ * import, and update the instantiation site in ProjectAnalyzer to inject the
+ * shared ITextFileAccess instance.
  */
 export class DatabaseTools {
   /**
