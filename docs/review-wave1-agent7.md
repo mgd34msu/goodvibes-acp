@@ -1,180 +1,205 @@
-# Review: Filesystem & Terminal Bridge (Wave 1, Agent 7 — Iteration 3)
+# Wave 1 — Agent 7: Filesystem & Terminal Bridge Review
 
-**Reviewer**: goodvibes:reviewer  
-**Date**: 2026-03-07  
-**Scope**: `src/extensions/acp/fs-bridge.ts`, `src/extensions/acp/terminal-bridge.ts`  
-**KB References**: `docs/acp-knowledgebase/07-filesystem-terminal.md`, `docs/acp-knowledgebase/01-overview.md`  
-**Spec Reference**: `https://agentclientprotocol.com/llms-full.txt`  
-**Score**: 8.2 / 10
-
----
-
-## Summary
-
-Both bridge files are well-structured with clear capability gating, proper fallback paths, and good documentation. Iteration 2 fixes addressed encoding validation on the write path and stderr inclusion in terminal output. Remaining issues are moderate: an env format mismatch with the KB wire example, a timeout not forwarded to the ACP SDK, a silent exitCode default that could mask failures, shell injection risk in the spawn fallback, and minor output fidelity gaps.
+**Reviewer**: ACP Compliance Review Agent (Iteration 4)  
+**Files**: `src/extensions/acp/fs-bridge.ts`, `src/extensions/acp/terminal-bridge.ts`, `src/extensions/acp/permission-gate.ts`  
+**KB References**: KB-05 (Permissions), KB-06 (Tools & MCP), KB-09 (TypeScript SDK), KB-10 (Implementation Guide)
 
 ---
 
 ## Issues
 
-| # | File | Line(s) | Severity | Category | KB Reference |
-|---|------|---------|----------|----------|--------------|
-| 1 | `terminal-bridge.ts` | 80-82 | Major | Spec Compliance | KB-07 L223-224 |
-| 2 | `terminal-bridge.ts` | 154-158 | Minor | Spec Compliance | KB-07 L276, L285 |
-| 3 | `terminal-bridge.ts` | 202 | Major | Error Handling | KB-07 L333 |
-| 4 | `terminal-bridge.ts` | 109-115 | Minor | Security | KB-07 L234 |
-| 5 | `terminal-bridge.ts` | 179 | Minor | Correctness | KB-07 L302 |
-| 6 | `terminal-bridge.ts` | 71-77 | Minor | Spec Compliance | KB-07 L244-245 |
-| 7 | `terminal-bridge.ts` | 240 | Nitpick | Error Handling | — |
+### 1. [Critical] fs-bridge.ts L62 — ReadTextFileResponse field mismatch
 
----
+**File**: `src/extensions/acp/fs-bridge.ts`, line 62  
+**KB**: KB-09 L178-183, KB-10 L552
 
-## Issue Details
-
-### 1. [Major] `env` converted to `EnvVariable[]` array but KB-07 wire format shows plain object
-
-**File**: `src/extensions/acp/terminal-bridge.ts:80-82`  
-**KB**: KB-07 lines 222-227
-
-The KB wire example for `terminal/create` shows `env` as a plain JSON object:
-```json
-"env": { "NODE_ENV": "production" }
-```
-
-But the code converts `env` to an `EnvVariable[]` array:
-```typescript
-const envVars: schema.EnvVariable[] | undefined = env
-  ? Object.entries(env).map(([name, value]) => ({ name, value }))
-  : undefined;
-```
-
-This relies on the SDK `schema.EnvVariable` type requiring array format, which may diverge from the wire-level protocol. If the SDK internally converts back to object format, this is fine. If not, the client receives an unexpected shape.
-
-**Fix**: Verify that `conn.createTerminal()` accepts `EnvVariable[]` and the SDK handles serialization to wire format. If the SDK expects a plain object, pass `env` directly instead of converting.
-
----
-
-### 2. [Minor] `timeout` not forwarded to ACP SDK `currentOutput()` call
-
-**File**: `src/extensions/acp/terminal-bridge.ts:154-158`  
-**KB**: KB-07 lines 276, 285
-
-KB-07 shows `terminal/output` accepts an optional `timeout` parameter in the request params. The code documents this as ISS-073 and uses a local `Promise.race` workaround instead of forwarding `timeout` to the SDK.
-
-While the workaround is functional, it means the timeout is enforced client-side rather than server-side. The ACP client may have more efficient timeout handling (e.g., not buffering output until timeout). When the SDK is updated, this should forward the timeout.
-
-**Fix**: Track ISS-073 and update when `currentOutput()` accepts a timeout parameter. The `Promise.race` workaround is acceptable as a temporary measure.
-
----
-
-### 3. [Major] `waitForExit` silently defaults `exitCode` to 0 when null
-
-**File**: `src/extensions/acp/terminal-bridge.ts:202`  
-**KB**: KB-07 line 333
+The ACP path returns `response.content` but the SDK `ReadTextFileResponse` type is documented as `{ text: string }` (KB-09 L182). KB-10's reference implementation also uses `result.text`. If the SDK returns `text` rather than `content`, this will silently return `undefined`.
 
 ```typescript
-exitCode: exitResult.exitCode ?? 0,
+// Current (fs-bridge.ts:62)
+return response.content;
+
+// Expected per KB-09
+return response.text;
 ```
 
-KB-07 shows `waitForExit` returns `{ "exitCode": 0 }` — the exitCode should always be present in the response. Defaulting `null` to `0` masks potential failures where the ACP client returned null due to an error or signal-based termination. A process killed by signal typically has no numeric exit code, and reporting 0 (success) is misleading.
-
-**Fix**: Use `exitResult.exitCode ?? -1` to indicate abnormal termination, or throw an error if exitCode is null since the spec guarantees it should be present in the response.
+**Fix**: Verify the actual SDK type at compile-time. If `ReadTextFileResponse` has `text`, change to `response.text`.
 
 ---
 
-### 4. [Minor] `shell: true` in spawn fallback creates shell injection risk
+### 2. [Critical] fs-bridge.ts L101-105 — WriteTextFileRequest field mismatch
 
-**File**: `src/extensions/acp/terminal-bridge.ts:109-115`
+**File**: `src/extensions/acp/fs-bridge.ts`, lines 101-105  
+**KB**: KB-09 L196-198, KB-10 L561-564
 
-The spawn fallback uses `shell: true` because `command` is a bare string. The comment at lines 100-108 documents this tradeoff explicitly, noting callers must sanitize untrusted input.
-
-However, there is no input sanitization at the bridge layer. If any caller passes user-controlled input as `command`, shell injection is possible.
-
-**Fix**: Consider adding basic command validation (e.g., reject commands containing `; && || | \` or backticks`) or document the security boundary more prominently. Alternatively, parse the command string into `[executable, ...args]` and use `shell: false`.
-
----
-
-### 5. [Minor] Spawn fallback output concatenates stdout+stderr instead of interleaving
-
-**File**: `src/extensions/acp/terminal-bridge.ts:179`  
-**KB**: KB-07 line 302
+The write call sends `{ path, content, sessionId }` but the SDK `WriteTextFileRequest` type is documented as `{ sessionId, path, text }` (KB-09 L197). KB-10's reference also uses `text: content`. Sending `content` instead of `text` means the SDK receives an unrecognized field and the file content is silently dropped.
 
 ```typescript
-output: internal.stdout.join('') + internal.stderr.join(''),
+// Current (fs-bridge.ts:101-105)
+await this.conn.writeTextFile({
+  path,
+  content,       // Wrong field name
+  sessionId: this.sessionId,
+});
+
+// Expected per KB-09/KB-10
+await this.conn.writeTextFile({
+  sessionId: this.sessionId,
+  path,
+  text: content,  // Correct field name
+});
 ```
 
-KB-07 states the `output` field contains terminal output (which in a real terminal is interleaved stdout+stderr). The current approach appends all stderr after all stdout, which can produce confusing output where error messages appear after the full stdout rather than at the point they occurred.
-
-The comment at lines 174-177 acknowledges this and suggests a fix (single combined buffer).
-
-**Fix**: Push both stdout and stderr chunks into a single `output: string[]` buffer in arrival order to match real terminal behavior.
+**Fix**: Change `content` to `text: content`.
 
 ---
 
-### 6. [Minor] Returned `TerminalHandle` does not include ACP `terminalId` for debugging
+### 3. [Major] terminal-bridge.ts L229 — Inconsistent null exit code handling between spawn paths
 
-**File**: `src/extensions/acp/terminal-bridge.ts:71-77`  
-**KB**: KB-07 lines 244-245
+**File**: `src/extensions/acp/terminal-bridge.ts`, lines 134, 204, 229, 241  
+**KB**: KB-10 L658
 
-The `create()` method generates a local `id` (`term-1`, `term-2`, etc.) and returns it as the handle. The ACP `terminalId` from the client response is stored internally in `AcpBackedHandle.acpHandle` but is not accessible from the returned `TerminalHandle`.
+Exit code null-coalescing is inconsistent across the spawn fallback:
 
-This makes debugging harder — when inspecting a handle, there is no way to correlate it with the ACP client's terminal ID.
+| Location | Expression | Null maps to |
+|----------|-----------|-------------|
+| L134 (on-exit handler) | `code ?? -1` | -1 |
+| L204 (ACP waitForExit) | `exitResult.exitCode ?? -1` | -1 |
+| L229 (spawn waitForExit) | `internal.exitCode ?? 0` | 0 |
+| L238 (spawn already-exited) | `proc.exitCode` (no coalesce) | null passthrough |
 
-**Fix**: Consider adding an optional `acpTerminalId` field to `TerminalHandle` or logging the mapping at creation time.
+Line 229 maps null to `0` (success) while all other paths use `-1` (error sentinel). A process killed by a signal has `exitCode === null` — reporting that as `0` hides the failure. The ISS-146 fix at L204 was applied for the ACP path but the spawn path at L229 was missed.
+
+**Fix**: Change L229 from `internal.exitCode ?? 0` to `internal.exitCode ?? -1` for consistency.
 
 ---
 
-### 7. [Nitpick] Exit code -1 sentinel inconsistency between `create` and `waitForExit`
+### 4. [Major] terminal-bridge.ts L109-115 — Shell injection risk in spawn fallback
 
-**File**: `src/extensions/acp/terminal-bridge.ts:240`
+**File**: `src/extensions/acp/terminal-bridge.ts`, lines 109-115  
+**KB**: KB-05 (Permissions), KB-10 L652-653
 
-In the spawn fallback `exit` handler:
+The spawn fallback uses `shell: true` with the raw `command` string. While documented in comments (L100-108), there is no input sanitization. If `command` originates from LLM output or user input, arbitrary shell commands can be injected via metacharacters (`;`, `&&`, `|`, `` ` ``, `$()`).
+
+KB-10's reference code also uses `shell: true` (L653), so this matches the reference — but the reference is a minimal skeleton, not a production hardening guide. KB-05 establishes that shell commands should go through a permission gate before execution.
+
+**Mitigation**: The permission gate (KB-05) should catch this at a higher level. However, defense-in-depth suggests either:
+1. Validating/escaping `command` before passing to `spawn`, or
+2. Splitting `command` into `[executable, ...args]` and using `shell: false` when possible.
+
+---
+
+### 5. [Major] terminal-bridge.ts L160-165, L212-216, L249-254 — Timer leak in timeout race patterns
+
+**File**: `src/extensions/acp/terminal-bridge.ts`, lines 160-165, 212-216, 249-254  
+**KB**: General correctness
+
+All three `Promise.race` timeout patterns create a `setTimeout` timer that is never cleared when the primary promise wins the race. This leaks a timer reference per call. In a long-running agent with many terminal operations, this can accumulate.
+
 ```typescript
-proc.once('exit', (code) => {
-  internal.exitCode = code ?? -1;
+// Current pattern (repeated 3x)
+Promise.race([
+  primaryPromise,
+  new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error(...)), timeout)
+  ),
+])
+
+// Correct pattern
+Promise.race([
+  primaryPromise.finally(() => clearTimeout(timer)),
+  new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(...)), timeout);
+  }),
+])
 ```
 
-But in `waitForExit` for the ACP path (line 202):
-```typescript
-exitCode: exitResult.exitCode ?? 0,
-```
-
-The spawn path uses `-1` for null exit codes (signal termination) while the ACP path uses `0`. This inconsistency means the same abnormal termination condition reports differently depending on whether the ACP path or spawn path was used.
-
-**Fix**: Use a consistent sentinel value across both paths. `-1` is more appropriate for abnormal termination.
+**Fix**: Store `setTimeout` return value and `clearTimeout` it when the primary promise resolves.
 
 ---
 
-## What's Done Well
+### 6. [Major] terminal-bridge.ts — No `args` array in TerminalCreateOptions
 
-- **Capability gating**: Both bridges correctly check `clientCapabilities` before routing to ACP, with clean fallback to direct I/O (KB-07 requirement).
-- **Encoding validation**: `fs-bridge.ts` validates encodings against a whitelist (line 19-21) and correctly rejects non-UTF-8 on the ACP write path (lines 96-100).
-- **Resource cleanup**: `terminal-bridge.ts` `release()` properly kills running processes, clears buffers, and removes handles.
-- **ISS-073 documentation**: The SDK limitation for `currentOutput()` timeout is clearly documented with a workaround and upgrade path.
-- **Comment quality**: Both files have thorough JSDoc and inline comments explaining design decisions and tradeoffs.
+**File**: `src/extensions/acp/terminal-bridge.ts`, line 72, line 110  
+**KB**: KB-09 L213-221, KB-10 L606
 
----
+The ACP `CreateTerminalRequest` supports `args?: string[]` (KB-09 L217) and KB-10's reference passes `args` separately (L611-612). However, `TerminalCreateOptions` (L0 type at `src/types/registry.ts`) appears to only expose `command` as a bare string — no `args` field. The spawn fallback at L110 passes an empty args array: `spawn(command, [], ...)`, meaning all arguments must be embedded in the command string, forcing `shell: true`.
 
-## Category Breakdown
+The ACP path at L86-91 also doesn't forward any args — the `createTerminal` call only sends `command` with no `args` field.
 
-| Category | Score | Notes |
-|----------|-------|-------|
-| Spec Compliance | 7/10 | env format question, timeout not forwarded, terminalId not exposed |
-| Error Handling | 7/10 | exitCode 0 default masks failures, inconsistent sentinel values |
-| Security | 8/10 | shell injection documented but not mitigated at bridge layer |
-| Organization | 9/10 | Clean separation, clear module structure |
-| Naming | 9/10 | Clear, consistent naming throughout |
-| Documentation | 9/10 | Excellent comments, KB references, tradeoff documentation |
-| Testing | N/A | No test files in scope |
-| Performance | 9/10 | No unnecessary allocations or copies |
-| SOLID/DRY | 9/10 | Clean single-responsibility, no duplication |
-| Dependencies | 9/10 | Minimal imports, no circular references |
+**Fix**: Add `args?: string[]` to `TerminalCreateOptions` in L0 types. Forward it in both the ACP path (`args: opts.args`) and spawn path (`spawn(command, args, { shell: false })` when args are present).
 
 ---
 
-## Recommendations
+### 7. [Minor] terminal-bridge.ts L179 — stdout/stderr not interleaved temporally
 
-1. **Immediate**: Fix exitCode default from `?? 0` to `?? -1` on the ACP path (Issue 3) — this can mask real failures.
-2. **This PR**: Verify `EnvVariable[]` vs plain object wire format with the SDK (Issue 1).
-3. **Follow-up**: Implement interleaved output buffer for spawn fallback (Issue 5).
-4. **Track**: ISS-073 for SDK timeout parameter support (Issue 2).
+**File**: `src/extensions/acp/terminal-bridge.ts`, line 179  
+**KB**: KB-10 L654-655 (reference uses single combined buffer)
+
+The `output()` method concatenates all stdout chunks followed by all stderr chunks: `internal.stdout.join('') + internal.stderr.join('')`. This does not preserve temporal interleaving — stderr that appeared mid-stdout will be appended at the end.
+
+KB-10's reference implementation (L654-655) pushes both stdout and stderr into a single `outputBuffer`, preserving temporal order.
+
+**Fix**: Use a single combined output buffer that captures both streams in order, as shown in KB-10.
+
+---
+
+### 8. [Minor] terminal-bridge.ts L154-158 — Timeout not forwarded to ACP SDK currentOutput()
+
+**File**: `src/extensions/acp/terminal-bridge.ts`, lines 154-158  
+**KB**: KB-09 L563-564
+
+Documented as ISS-073 in the code. The SDK's `currentOutput()` accepts 0 arguments, so timeout is implemented via `Promise.race` locally. This is a known SDK limitation, not a code defect, but it means the client is unaware of the agent's timeout constraint. Severity is minor since the workaround is functionally correct.
+
+---
+
+### 9. [Minor] fs-bridge.ts — No permission gate integration for file operations
+
+**File**: `src/extensions/acp/fs-bridge.ts`  
+**KB**: KB-05 L186-197, KB-06 L160-161
+
+KB-05 establishes that `file_write` operations should be gated behind `session/request_permission` (L186-197). KB-06 shows the full lifecycle: pending tool_call -> permission request -> execute. The `AcpFileSystem` class performs reads and writes without any permission check.
+
+This is likely intentional — permission gating happens at a higher layer (the HookEngine/PermissionGate integration mentioned in permission-gate.ts ISS-018). However, there's no documentation in fs-bridge.ts indicating that callers are responsible for gating.
+
+**Fix**: Add a JSDoc comment noting that callers must gate write operations through the PermissionGate before calling `writeTextFile()`.
+
+---
+
+### 10. [Nitpick] fs-bridge.ts L56-61 — readTextFile passes line/limit but SDK type may not support them
+
+**File**: `src/extensions/acp/fs-bridge.ts`, lines 56-61  
+**KB**: KB-09 L178-179
+
+The ACP path forwards `options?.line` and `options?.limit` to `conn.readTextFile()`. However, KB-09 L178-179 documents `ReadTextFileRequest` as simply `{ sessionId, path }` with no `line`/`limit` fields. These extra fields may be silently ignored by the SDK, or may cause a type error.
+
+The direct disk fallback correctly implements line/limit slicing (L72-77), so the feature works in fallback mode. The ACP path may silently return full file content when line/limit are specified.
+
+**Fix**: Either confirm the SDK accepts `line`/`limit` and update KB-09, or remove them from the ACP call and apply the slicing logic to the ACP response as well.
+
+---
+
+## Summary
+
+| # | Severity | File | Issue |
+|---|----------|------|-------|
+| 1 | Critical | fs-bridge.ts:62 | ReadTextFileResponse uses `content` instead of `text` |
+| 2 | Critical | fs-bridge.ts:101-105 | WriteTextFileRequest uses `content` instead of `text` |
+| 3 | Major | terminal-bridge.ts:229 | Null exit code maps to 0 (success) instead of -1 |
+| 4 | Major | terminal-bridge.ts:109-115 | Shell injection risk with unsanitized command + shell:true |
+| 5 | Major | terminal-bridge.ts | Timer leak in 3x Promise.race timeout patterns |
+| 6 | Major | terminal-bridge.ts | No args array support; forces shell:true |
+| 7 | Minor | terminal-bridge.ts:179 | stdout/stderr not interleaved temporally |
+| 8 | Minor | terminal-bridge.ts:154-158 | Timeout not forwarded to SDK (ISS-073, known) |
+| 9 | Minor | fs-bridge.ts | No permission gate documentation for callers |
+| 10 | Nitpick | fs-bridge.ts:56-61 | line/limit params may not be supported by SDK |
+
+**Critical**: 2 | **Major**: 4 | **Minor**: 3 | **Nitpick**: 1
+
+---
+
+## Overall Score: 5/10
+
+Two critical field-name mismatches in fs-bridge.ts would cause silent data loss on the ACP path (reads return undefined, writes send empty content). These are likely masked during development if tests only exercise the disk fallback path. The terminal-bridge has good structure and documented ISS-tracking, but carries four major issues around exit code consistency, security, timer leaks, and missing args support. The permission-gate module is well-implemented with proper SDK/spec divergence handling.
+
+**Note on Critical issues**: If the SDK's actual TypeScript types use `content` (not `text`) for ReadTextFileResponse/WriteTextFileRequest — contradicting KB-09's documentation — then issues #1 and #2 are false positives caused by KB-09 inaccuracy, not code defects. The score would improve to ~7/10 in that case. Recommend verifying against the actual `@agentclientprotocol/sdk` v0.15.0 type definitions.

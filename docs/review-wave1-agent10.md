@@ -1,211 +1,170 @@
 # Wave 1 Review — Agent 10: Config & Initialization
 
-**Reviewer:** goodvibes:reviewer  
-**Scope:** `src/core/config.ts`, `src/extensions/acp/config-adapter.ts`, `src/types/config.ts`, `index.ts`  
-**KB Sources:** `02-initialization.md`, `10-implementation-guide.md`  
-**ACP Spec:** Fetched from `https://agentclientprotocol.com/llms-full.txt`  
-**SDK Version:** `@agentclientprotocol/sdk` v0.15.0  
-
----
-
-## Summary
-
-The config and initialization layer is well-structured with clean layering (L0 types, L1 core, L2 adapter). The `Config` class provides layered configuration with defaults, file, env, and runtime overrides. The ACP config-adapter correctly uses SDK schema types. However, the L0 `SessionConfigOptionChoice` type diverges from the SDK's `SessionConfigSelectOption` shape, the L0 type system declares unsupported config option types, and the config-adapter's default mode contradicts the implementation guide.
+**Scope**: `src/types/config.ts`, `src/core/config.ts`, `src/main.ts`  
+**KB References**: KB-01 (Overview), KB-02 (Initialization), KB-03 (Sessions/ConfigOptions), KB-10 (Implementation Guide)  
+**Reviewer**: ACP Compliance Review Agent (Iteration 4)
 
 ---
 
 ## Issues
 
-### Issue 1 — L0 `SessionConfigOptionChoice.label` contradicts SDK `SessionConfigSelectOption.name`
+### 1. Config file never loaded at startup
 
 | Field | Value |
 |-------|-------|
-| **File** | `src/types/config.ts` |
-| **Line** | 80 |
+| **File** | `src/main.ts:71` |
 | **Severity** | Major |
-| **KB Topic** | KB-10 Section 9, ACP SDK `SessionConfigSelectOption` |
+| **KB Topic** | KB-10 §2 (Project Setup), general config management |
 
-The L0 type defines `label?: string` (optional) but the SDK type `SessionConfigSelectOption` uses `name: string` (required). This means any code using the L0 type to build config options would produce objects missing the required `name` field.
+`Config` is instantiated (`new Config()`) but `config.load()` is never called anywhere in `main.ts`. The `Config.load()` method exists and supports JSON file loading with env override re-application, but the startup sequence skips it entirely. Any `goodvibes.config.json` file is silently ignored.
 
-**SDK definition** (`schema/types.gen.d.ts:2210`):
-```typescript
-export type SessionConfigSelectOption = {
-  name: string;          // required
-  value: SessionConfigValueId;
-  description?: string | null;
-  _meta?: { [key: string]: unknown } | null;
-};
-```
-
-**Current L0 type:**
-```typescript
-export type SessionConfigOptionChoice = {
-  value: string;
-  label?: string;   // wrong field name, wrong optionality
-  description?: string;
-};
-```
-
-**Fix:** Rename `label` to `name` and make it required to match the SDK.
+**Fix**: Call `await config.load('./goodvibes.config.json')` (or a configurable path) before reading config values at line 157.
 
 ---
 
-### Issue 2 — L0 `SessionConfigOptionType` declares unsupported types
+### 2. Config validation never invoked
 
 | Field | Value |
 |-------|-------|
-| **File** | `src/types/config.ts` |
-| **Line** | 89 |
+| **File** | `src/main.ts` (after line 71) |
+| **Severity** | Minor |
+| **KB Topic** | KB-10 §1 (robustness) |
+
+`Config.validate()` exists with checks for `runtime.mode`, `runtime.port`, `wrfc.minReviewScore`, `wrfc.maxFixAttempts`, and `logging.level`, but is never called during startup. Invalid config values propagate silently.
+
+**Fix**: Call `config.validate()` after loading and check `result.valid`, throwing on failure.
+
+---
+
+### 3. Daemon port/host bypass Config system
+
+| Field | Value |
+|-------|-------|
+| **File** | `src/main.ts:465–491` |
 | **Severity** | Major |
-| **KB Topic** | ACP SDK `SessionConfigOption` type |
+| **KB Topic** | KB-10 §2, config layering |
 
-The L0 type declares `'select' | 'boolean' | 'text'` but the SDK's `SessionConfigOption` is defined as `SessionConfigSelect & { type: "select" }`. The ACP spec only supports `type: "select"` — there is no `'boolean'` or `'text'` config option type. The comment on line 88 (`@remarks All three types are natively supported by the ACP spec`) is factually incorrect.
+Daemon mode reads `GOODVIBES_DAEMON_PORT`, `GOODVIBES_DAEMON_HOST`, and `GOODVIBES_DAEMON_HEALTH_PORT` directly from `process.env` and CLI args, completely bypassing the Config system. Meanwhile, `RuntimeConfig` defines `runtime.port` and `runtime.host` fields that go unused. This creates two parallel config paths that can disagree.
 
-**Fix:** Either restrict to `type: 'select'` to match the spec, or clearly document that `'boolean'` and `'text'` are GoodVibes-internal extensions that must be serialized as `'select'` on the wire.
+**Fix**: Read daemon port/host from `config.get('runtime.port')` and `config.get('runtime.host')`, falling back to CLI args/env only as overrides. Alternatively, unify the env var names so `applyEnvOverrides` handles them (e.g., `GOODVIBES_RUNTIME__PORT` instead of `GOODVIBES_DAEMON_PORT`).
 
 ---
 
-### Issue 3 — `buildConfigOptions` default mode contradicts KB-10
+### 4. `GOODVIBES_MODE` env var collision with env override system
 
 | Field | Value |
 |-------|-------|
-| **File** | `src/extensions/acp/config-adapter.ts` |
-| **Line** | 39 |
+| **File** | `src/main.ts:411`, `src/core/config.ts:123` |
 | **Severity** | Minor |
-| **KB Topic** | KB-10 Section 9 (line 688, 752) |
+| **KB Topic** | Config layering |
 
-KB-10 Section 9 specifies that `buildConfigOptions` should default to `'vibecoding'` mode:
-```typescript
-// KB-10 line 688:
-export function buildConfigOptions(
-  currentMode: GoodVibesMode = 'vibecoding',
-```
-And line 752: `configOptions: buildConfigOptions(), // starts in vibecoding by default`
+`main.ts` checks `process.env.GOODVIBES_MODE === 'daemon'` directly for mode detection. However, `applyEnvOverrides()` would also process `GOODVIBES_MODE` and map it to config path `mode` (a top-level key). This creates ambiguity: the direct check happens before config loading, and the env override system would set a different path than `runtime.mode`.
 
-But the implementation defaults to `'justvibes'` (line 39). While `'justvibes'` may be a deliberate safety choice, it diverges from the guide without documented rationale.
-
-**Fix:** Either change the default to `'vibecoding'` per KB-10, or add a comment documenting why `'justvibes'` was chosen as the safer default.
+**Fix**: Use `GOODVIBES_RUNTIME__MODE` for the env var (matching the double-underscore nesting convention), or read mode from `config.get('runtime.mode')` after config is fully loaded.
 
 ---
 
-### Issue 4 — Missing `emitConfigUpdate` function from KB-10
+### 5. `SessionConfigOption.category` not typed to ACP standard categories
 
 | Field | Value |
 |-------|-------|
-| **File** | `src/extensions/acp/config-adapter.ts` |
-| **Line** | 133 (end of file) |
+| **File** | `src/types/config.ts:109` |
 | **Severity** | Minor |
-| **KB Topic** | KB-10 Section 9 (lines 732-745) |
+| **KB Topic** | KB-03 line 254: `ConfigOptionCategory` |
 
-KB-10 Section 9 describes an `emitConfigUpdate` function for agent-initiated config updates (e.g., mode auto-switched after planning):
-```typescript
-export async function emitConfigUpdate(
-  conn: acp.AgentSideConnection,
-  sessionId: string,
-  options: acp.ConfigOption[],
-): Promise<void> { ... }
-```
+KB-03 defines `ConfigOptionCategory = "mode" | "model" | "thought_level" | \`_\${string}\``. The `SessionConfigOption.category` field is typed as plain `string`, which allows non-spec categories without the required `_` prefix for custom ones.
 
-This function is not present in `config-adapter.ts`. While it may be implemented elsewhere (e.g., `session-adapter.ts`), its absence from the canonical config-adapter file means agent-initiated config pushes have no reusable helper.
-
-**Fix:** Add `emitConfigUpdate` to `config-adapter.ts` or document where this capability is implemented.
+**Fix**: Define `type SessionConfigOptionCategory = 'mode' | 'model' | 'thought_level' | \`_\${string}\`` and use it for the `category` field.
 
 ---
 
-### Issue 5 — `GoodVibesMode` includes `'plan'` which is not in KB-10
+### 6. `SessionConfigOption.options` is optional but KB-03 requires it
 
 | Field | Value |
 |-------|-------|
-| **File** | `src/extensions/acp/config-adapter.ts` |
-| **Line** | 16 |
+| **File** | `src/types/config.ts:120` |
+| **Severity** | Major |
+| **KB Topic** | KB-03 line 267: `options: ConfigOptionValue[]` |
+
+KB-03 defines `options: ConfigOptionValue[]` as a required field on `ConfigOption`. In `src/types/config.ts`, it is declared as `options?: SessionConfigOptionChoice[]` (optional). Since the only valid `type` is `'select'`, the options array is always needed to define available values.
+
+**Fix**: Change `options?:` to `options:` (remove the `?`).
+
+---
+
+### 7. Missing `_meta` on `SessionConfigOption`
+
+| Field | Value |
+|-------|-------|
+| **File** | `src/types/config.ts:103–123` |
 | **Severity** | Nitpick |
-| **KB Topic** | KB-10 Section 9 (line 685) |
+| **KB Topic** | KB-01 line 376, KB-08 extensibility |
 
-KB-10 defines `GoodVibesMode = 'justvibes' | 'vibecoding' | 'sandbox'` (3 modes). The implementation adds a fourth mode `'plan'`. This is not necessarily wrong (the implementation may have evolved beyond the guide), but it's undocumented in the KB.
+KB-01 states all ACP types accept an optional `_meta` field. `SessionConfigOptionChoice` correctly includes `_meta?: Record<string, unknown>`, but `SessionConfigOption` itself does not. This limits extensibility for config options sent over the wire.
 
-**Fix:** Update KB-10 to include the `'plan'` mode, or add a comment in the code explaining the addition.
+**Fix**: Add `_meta?: Record<string, unknown>` to `SessionConfigOption`.
 
 ---
 
-### Issue 6 — `Config.validate()` does not validate `logging.level`
+### 8. Shutdown grace period ignores `agentGracePeriodMs` config
 
 | Field | Value |
 |-------|-------|
-| **File** | `src/core/config.ts` |
-| **Line** | 296-314 |
+| **File** | `src/main.ts:436` |
 | **Severity** | Minor |
-| **KB Topic** | L0 `LogLevel` type (`src/types/config.ts:13`) |
+| **KB Topic** | KB-10 §Bootstrap checklist: graceful teardown |
 
-`validate()` checks `runtime.mode`, `runtime.port`, `wrfc.minReviewScore`, and `wrfc.maxFixAttempts`, but does not validate `logging.level` against the `LogLevel` union (`'debug' | 'info' | 'warn' | 'error' | 'silent'`). Since env var overrides can set arbitrary string values for `logging.level`, this value could silently become invalid.
+The graceful shutdown uses `setTimeout(() => process.exit(0), 2000)` — a hardcoded 2-second timer. Meanwhile, `RuntimeConfig.runtime.agentGracePeriodMs` defaults to 10000ms. The config value is never consulted. Agents running long tasks may be killed before their grace period expires.
 
-**Fix:** Add validation for `logging.level` against the `LogLevel` enum values.
+**Fix**: Use `config.get<number>('runtime.agentGracePeriodMs') ?? 10000` for the timeout value.
 
 ---
 
-### Issue 7 — `applyEnvOverrides` number coercion is too narrow
+### 9. Config instance not passed to GoodVibesAgent
 
 | Field | Value |
 |-------|-------|
-| **File** | `src/core/config.ts` |
-| **Line** | 142 |
+| **File** | `src/main.ts:206` |
 | **Severity** | Minor |
-| **KB Topic** | Config env override system |
+| **KB Topic** | KB-03 (configOptions in session/new response), KB-10 §4 |
 
-The regex `/^\d+$/` only matches positive integers. Floating-point values like `GOODVIBES_WRFC__MIN_REVIEW_SCORE=9.5` will be treated as strings rather than numbers, silently breaking the config value's expected type.
+The `createConnection` factory passes `registry, eventBus, sessionManager, wrfcAdapter, mcpBridge` to `GoodVibesAgent`, but not the `Config` instance. The agent cannot derive session-level `configOptions` defaults (e.g., default model, default mode) from runtime configuration. Config-driven behavior changes require manual plumbing rather than centralized config access.
 
-**Fix:** Use a regex like `/^-?\d+(\.\d+)?$/` and `parseFloat` instead of `parseInt` for numeric coercion, or use `Number(envValue)` with `!isNaN` check.
-
----
-
-### Issue 8 — `_notifyChange` swallows listener errors
-
-| Field | Value |
-|-------|-------|
-| **File** | `src/core/config.ts` |
-| **Line** | 333-338 |
-| **Severity** | Minor |
-| **KB Topic** | Error handling, observability |
-
-Listener errors are caught and logged to `console.error` but not propagated to any structured logging or error tracking system. In production, a failing config change listener could silently break functionality (e.g., a WRFC threshold change not propagating to the orchestrator) with only a stderr message as evidence.
-
-**Fix:** Either emit an event on the EventBus for listener failures, or log via the structured logging system (`LogsManager`) instead of raw `console.error`.
+**Fix**: Pass `config` as a constructor parameter to `GoodVibesAgent`.
 
 ---
 
-### Issue 9 — L0 `SessionConfigOptionChoice` missing `_meta` field
+### 10. `SessionConfigOption.description` placement inconsistency with KB-03
 
 | Field | Value |
 |-------|-------|
-| **File** | `src/types/config.ts` |
-| **Line** | 76-83 |
+| **File** | `src/types/config.ts:103–123` |
 | **Severity** | Nitpick |
-| **KB Topic** | ACP SDK extensibility (`SessionConfigSelectOption._meta`) |
+| **KB Topic** | KB-03 line 260–267 |
 
-The SDK's `SessionConfigSelectOption` includes an optional `_meta` field for extensibility metadata. The L0 type omits this, which means any GoodVibes-specific metadata on individual config option values would need to be added ad-hoc rather than through the type system.
+KB-03 places `description` directly on `ConfigOption` (line 263: `description?: string`) and also on `ConfigOptionValue` (line 273: `description?: string`). The implementation matches this structure, but the `category` field is typed differently: KB-03 specifies `category?: ConfigOptionCategory` (optional), while the implementation has `category: string` (required, untyped). This means the implementation rejects valid ACP config options that omit `category`.
 
-**Fix:** Add `_meta?: Record<string, unknown>` to `SessionConfigOptionChoice`.
-
----
-
-## Category Breakdown
-
-| Category | Score | Key Issues |
-|----------|-------|------------|
-| Security | 9/10 | No secrets exposure, env var handling is safe |
-| Error Handling | 7/10 | Listener errors swallowed, validation gaps |
-| Organization | 9/10 | Clean L0/L1/L2 layering, good separation |
-| Performance | 9/10 | deepClone via JSON is adequate for config sizes |
-| SOLID/DRY | 8/10 | L0 type diverges from SDK type (DRY violation) |
-| Naming | 8/10 | `label` vs `name` mismatch with SDK |
-| Maintainability | 8/10 | Well-documented, good JSDoc comments |
-| Documentation | 7/10 | Incorrect comment on line 88 about spec support |
-| Testing | N/A | Tests not in scope |
-| Dependencies | 9/10 | Config has zero external deps, adapter uses SDK correctly |
+**Fix**: Make `category` optional: `category?: SessionConfigOptionCategory`.
 
 ---
 
-## Score: 7.4/10
+## Summary
 
-**2 Major** | **4 Minor** | **2 Nitpick** | **1 Incorrect comment**
+| # | Issue | Severity | File |
+|---|-------|----------|------|
+| 1 | Config file never loaded | Major | `src/main.ts:71` |
+| 2 | Config validation never invoked | Minor | `src/main.ts` |
+| 3 | Daemon port/host bypass Config | Major | `src/main.ts:465–491` |
+| 4 | `GOODVIBES_MODE` env var collision | Minor | `src/main.ts:411` |
+| 5 | `category` not typed to ACP categories | Minor | `src/types/config.ts:109` |
+| 6 | `options` field incorrectly optional | Major | `src/types/config.ts:120` |
+| 7 | Missing `_meta` on `SessionConfigOption` | Nitpick | `src/types/config.ts:103` |
+| 8 | Shutdown ignores `agentGracePeriodMs` | Minor | `src/main.ts:436` |
+| 9 | Config not passed to agent | Minor | `src/main.ts:206` |
+| 10 | `category` required but spec says optional | Nitpick | `src/types/config.ts:109` |
 
-The major issues are the L0 type divergence from the SDK schema (`label` vs `name`, unsupported `boolean`/`text` types). These can cause wire-format incompatibilities if any code path uses the L0 types to build ACP responses rather than the SDK types directly.
+**Severity counts**: 3 Major, 5 Minor, 2 Nitpick
+
+## Overall Score: 5.5 / 10
+
+The Config system has solid internal design (layered overrides, env var parsing, validation, change listeners) but is largely disconnected from the runtime. The config file is never loaded, validation is never called, and daemon mode bypasses the config system entirely. The L0 config types also have several ACP spec mismatches (`options` optionality, `category` typing, missing `_meta`). The initialization flow in `agent.ts` is well-implemented with proper protocol version negotiation, but the config layer that should feed into it is underutilized.

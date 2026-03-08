@@ -1,88 +1,142 @@
-# Review: Trigger Engine & Scheduler (Wave 2, Agent 3 — Iteration 3)
+# Wave 2 Review — Agent 3: Trigger Engine & Scheduler
 
-**Score: 7.8/10** | **Issues: 0 critical, 4 major, 5 minor, 1 nitpick**
+**Reviewer**: ACP Compliance Review Agent  
+**Files reviewed**:  
+- `src/core/trigger-engine.ts`  
+- `src/core/scheduler.ts`  
+- `src/types/trigger.ts`  
 
-**Files reviewed:**
-- `src/core/trigger-engine.ts` (289 lines)
-- `src/core/scheduler.ts` (261 lines)
-
-**KB references:** `docs/acp-knowledgebase/08-extensibility.md`, `docs/acp-knowledgebase/04-prompt-turn.md`
-**ACP spec:** fetched from `https://agentclientprotocol.com/llms-full.txt`
-
----
-
-## Reality Check Results
-
-| Check | Status | Notes |
-|-------|--------|-------|
-| Files exist | PASS | Both source files present on disk |
-| Exports used | PASS | `TriggerEngine` and `Scheduler` imported in `src/core/index.ts` |
-| Import chain valid | PASS | Connected to barrel export |
-| No placeholders | PASS | No TODO/FIXME/stub implementations |
-| Integration verified | PASS | Both classes exported and instantiable |
+**KB references**: `08-extensibility.md` (_meta usage, custom field prohibition), `04-prompt-turn.md` (event lifecycle), `10-implementation-guide.md` (error handling, timeouts)
 
 ---
 
 ## Issues
 
-### Major Issues
+### 1. No timeout enforcement on trigger handler execution
+**File**: `src/core/trigger-engine.ts:227`  
+**KB**: `10-implementation-guide.md` — error handling; `src/types/registry.ts:197` — "complete within the trigger timeout"  
+**Severity**: HIGH  
 
-| # | File | Line | KB/Spec Topic | Severity | Issue |
-|---|------|------|---------------|----------|-------|
-| 1 | `src/core/trigger-engine.ts` | 181 | KB-04: EventRecord structure | Major | Session scoping uses `(event.payload as Record<string, unknown>)?.sessionId` but `EventRecord` has a top-level `sessionId` field (event-bus.ts:26). This bypasses the canonical field and inspects payload internals, which may not contain `sessionId` at all. Should use `event.sessionId !== definition.sessionId`. |
-| 2 | `src/core/trigger-engine.ts` | 206 | KB-08: error isolation | Major | Fire count is incremented (line 206) before handler lookup (line 209). If the handler is not found (line 210-213) or `canHandle` returns false (line 216-218), the fire count is still inflated. For triggers with `maxFires`, this causes premature exhaustion — the trigger stops firing before it has actually executed `maxFires` times. Move the increment to after line 218, just before handler execution. |
-| 3 | `src/core/trigger-engine.ts` | 105-106, 230 | KB-08: error events | Major | The engine subscribes to `'*'` (all events) and emits `'error'` events on handler failure. If any trigger has `eventPattern: '*'` or `eventPattern: 'error'`, the engine's own error emission re-enters `evaluate()`, creating a potential infinite recursion loop. Add a guard (e.g., skip evaluation when `event.type === 'error'` and source is self, or use a re-entrancy flag). |
-| 4 | `src/core/scheduler.ts` | 236, 243 | KB-08: extensibility / observability | Major | Errors in scheduled task handlers are logged to `console.error` and silently swallowed. In an ACP-aligned runtime, errors should be observable through the event/notification system. The Scheduler has no EventBus dependency to emit errors, making task failures invisible to the rest of the system. Consider accepting an optional `onError` callback or EventBus reference. |
+The `ITriggerHandler` interface documents that implementations "MUST be idempotent and complete within the trigger timeout," but `TriggerEngine.evaluate()` calls `handler.execute()` with no timeout enforcement. A handler that hangs will never be detected or cancelled. The `.catch()` on line 227 only catches rejections, not hangs.
 
-### Minor Issues
-
-| # | File | Line | KB/Spec Topic | Severity | Issue |
-|---|------|------|---------------|----------|-------|
-| 5 | `src/core/trigger-engine.ts` | 222 | KB-04: TriggerContext typing | Minor | `event: event as unknown as Record<string, unknown>` uses a double cast (`as unknown as`) to strip the `EventRecord` type down to the L0 `TriggerContext.event` type. While type-correct for the interface contract, this erases the typed `id`, `type`, `timestamp`, and `_meta` fields from the handler's perspective. Consider widening the L0 `TriggerContext.event` type to include at least `type` and `timestamp`, or provide a typed accessor. |
-| 6 | `src/core/trigger-engine.ts` | 31 | General: memory | Minor | Module-level `_regexCache` (`Map<string, RegExp | null>`) is never bounded and never cleared. If many distinct regex patterns are registered and unregistered over a long-running process, this cache grows without limit. Add a size cap or use the trigger lifecycle (unregister) to evict entries. |
-| 7 | `src/core/trigger-engine.ts` | 230-237 | KB-08: `_meta` error payload | Minor | Error payload in `_meta` converts the error to a string message (`err.message`) but discards the stack trace. For production debugging, include `'_goodvibes/stack': err instanceof Error ? err.stack : undefined` to preserve diagnostic information. |
-| 8 | `src/core/scheduler.ts` | 90, 107 | General: correctness | Minor | `task.nextRun` is set to `Date.now() + intervalMs` on line 90, then immediately overwritten to the same value on line 107 after the `setInterval` call. The first assignment is redundant. If `runImmediately` is true (line 96-98), the value on line 90 is stale by the time line 107 executes. Remove line 90's assignment or consolidate. |
-| 9 | `src/core/scheduler.ts` | 217 | General: status accuracy | Minor | `task.status` is set to `'running'` unconditionally on every `_execute()` call, even when `maxConcurrent > 1` and the task is already running from a prior concurrent invocation. This overwrites the already-correct `'running'` status, which is benign but semantically incorrect — `status` should only transition from `'scheduled'` to `'running'` on the first concurrent start, not on subsequent ones. |
-
-### Nitpick
-
-| # | File | Line | KB/Spec Topic | Severity | Issue |
-|---|------|------|---------------|----------|-------|
-| 10 | `src/core/scheduler.ts` | 84 | General: documentation | Nitpick | Default `intervalMs` of `60000` (1 minute) is a magic number used in three places (lines 84, 161, 222). Extract to a named constant (`DEFAULT_INTERVAL_MS`) and document it in the `ScheduleConfig` JSDoc (the current JSDoc says "Interval in milliseconds for recurring tasks" but doesn't mention the default). |
+**Fix**: Wrap `handler.execute()` with `Promise.race` against a configurable timeout (e.g., from `TriggerDefinition.metadata.timeoutMs` or a default), and reject with a timeout error if exceeded.
 
 ---
 
-## Category Breakdown
+### 2. Double-cast event type erasure in TriggerContext
+**File**: `src/core/trigger-engine.ts:222`  
+**KB**: `08-extensibility.md` — type safety across extension boundaries  
+**Severity**: MEDIUM  
 
-| Category | Score | Key Issues |
-|----------|-------|------------|
-| Security | 9/10 | Regex cache is unbounded but low risk |
-| Error Handling | 6/10 | Scheduler swallows errors; trigger fire count inflated on failures |
-| Testing | N/A | Tests not in scope |
-| Organization | 9/10 | Clean separation, proper layering |
-| Performance | 8/10 | Re-entrancy risk on error events; unbounded cache |
-| SOLID/DRY | 7/10 | Magic number repeated 3x; redundant nextRun assignment |
-| Naming | 9/10 | Clear, consistent naming throughout |
-| Maintainability | 8/10 | Double cast reduces type safety for handlers |
-| Documentation | 8/10 | Good JSDoc; missing default value documentation |
-| Dependencies | 10/10 | Zero external deps, clean imports |
+The context construction uses `event as unknown as Record<string, unknown>`, which erases the `EventRecord` type. This double-cast bypasses TypeScript's type system entirely. The `TriggerContext.event` field in L0 is typed as `Record<string, unknown>`, creating an impedance mismatch — handlers lose access to `event.type`, `event.timestamp`, and `event.payload` without further casting.
+
+**Fix**: Either widen `TriggerContext.event` in L0 to include `type` and `timestamp` fields, or create an L1 `TriggerContextWithEvent` type that preserves `EventRecord`. The double-cast `as unknown as` should be replaced with a proper type narrowing.
 
 ---
 
-## Positive Notes
+### 3. Unbounded regex cache growth
+**File**: `src/core/trigger-engine.ts:31`  
+**KB**: `10-implementation-guide.md` — resource management  
+**Severity**: MEDIUM  
 
-- KB-08 compliance on `_meta` usage is correct — custom fields are properly namespaced under `_goodvibes/` within `_meta`, not at root level
-- Error isolation pattern (catch on handler.execute promise) prevents one trigger from crashing others
-- Proper lifecycle management with `destroy()` and `_assertNotDestroyed()` guards
-- Scheduler's `Disposable` pattern aligns well with the EventBus subscription model
-- Clean L0/L1 layer separation maintained in type imports
+The module-level `_regexCache` Map grows without bound. Each unique regex pattern string adds an entry that is never evicted. In a long-running daemon with dynamic trigger registration/unregistration, this constitutes a memory leak. The cache also survives `TriggerEngine.destroy()`, which clears `_triggers` but not the shared module-level cache.
+
+**Fix**: Either scope the cache to the `TriggerEngine` instance (cleared on `destroy()`), or implement an LRU eviction policy with a reasonable cap (e.g., 256 entries).
 
 ---
 
-## Recommendations
+### 4. Scheduler computes nextRun twice on schedule
+**File**: `src/core/scheduler.ts:93,110`  
+**Severity**: LOW  
 
-1. **Immediate (before merge):** Fix fire count increment placement (issue 2) — this is a correctness bug that causes triggers with `maxFires` to exhaust prematurely
-2. **Immediate (before merge):** Add re-entrancy guard for error event recursion (issue 3)
-3. **Immediate (before merge):** Use `event.sessionId` instead of payload cast for session scoping (issue 1)
-4. **This PR:** Add error observability to Scheduler (issue 4) — even an `onError` callback would suffice
-5. **Follow-up:** Bound the regex cache and add stack traces to error payloads
+`nextRun` is set to `Date.now() + intervalMs` on line 93 during task construction, then overwritten with a new `Date.now() + intervalMs` on line 110 after the timer is created. The second computation produces a slightly later timestamp (by the time elapsed to create the timer and optionally execute `runImmediately`). This is cosmetically incorrect — the first value is stale by the time line 110 executes.
+
+**Fix**: Remove the line 93 assignment and only set `nextRun` after the timer is created (line 110).
+
+---
+
+### 5. Scheduler error handling uses console.error instead of EventBus
+**File**: `src/core/scheduler.ts:239,246`  
+**KB**: `08-extensibility.md` — error propagation via _meta; `10-implementation-guide.md` — structured error handling  
+**Severity**: MEDIUM  
+
+The Scheduler uses `console.error('[Scheduler] handler error:', err)` for error reporting, while TriggerEngine correctly emits errors to the EventBus with `_meta` fields (line 230-237). This inconsistency means scheduler errors are not observable by other runtime components (analytics, monitoring, error recovery hooks). In a production daemon, stderr output may be lost, but EventBus errors are capturable.
+
+**Fix**: Accept an optional `EventBus` in the Scheduler constructor and emit errors with `_goodvibes/source: 'scheduler'` metadata, mirroring the TriggerEngine pattern.
+
+---
+
+### 6. No cancellation support (AbortController) for in-flight handlers
+**File**: `src/core/trigger-engine.ts:227`, `src/core/scheduler.ts:236`  
+**KB**: `04-prompt-turn.md:480-486` — cancel flow; `10-implementation-guide.md` — graceful teardown  
+**Severity**: MEDIUM  
+
+Neither TriggerEngine nor Scheduler provide an `AbortSignal` to handler functions. On `destroy()`, both clear their internal state but have no way to signal in-flight async handlers to stop. This is particularly problematic for the Scheduler, where the comment on line 115 acknowledges "any in-progress execution will complete" but provides no mechanism to shorten that completion. The ACP cancel flow (KB-04) establishes the pattern that async operations should be cancellable.
+
+**Fix**: Pass an `AbortSignal` to handlers (extend `ScheduleConfig.handler` signature and `ITriggerHandler.execute` to accept one). On `destroy()`, abort the controller.
+
+---
+
+### 7. TriggerEngine silently skips missing handlers
+**File**: `src/core/trigger-engine.ts:207-210`  
+**KB**: `08-extensibility.md` — forward compatibility; `10-implementation-guide.md` — observability  
+**Severity**: LOW  
+
+When `registry.getOptional()` returns null (line 206), the trigger is silently skipped. The comment says "handler may not be loaded yet," but there is no diagnostic output, no event emission, and no way to distinguish between "handler not yet loaded" (transient) and "handler key misspelled" (permanent bug). Over time this creates silent failures that are difficult to debug.
+
+**Fix**: Emit a diagnostic event (e.g., `trigger:handler-missing`) on first miss per handler key, with deduplication to avoid event floods.
+
+---
+
+### 8. Scheduler task status stuck on 'running' if handler throws synchronously
+**File**: `src/core/scheduler.ts:235-248`  
+**Severity**: LOW  
+
+The `_execute` method correctly calls `done()` in the `catch` block (line 247), but `task.status` is set to `'running'` on line 220 before the handler is called. If `maxConcurrent` is 1 (default) and the handler throws, `done()` sets status back to `'scheduled'` only if `activeCount` drops to 0 and status is not cancelled/paused. This works correctly. However, if `maxConcurrent > 1` and one execution throws while another is still running, `task.status` remains `'running'` — which is correct but means no observer can distinguish "1 of 2 slots failed" from "both slots active."
+
+**Fix**: Consider adding an `errorCount` field to `ScheduledTask` for observability, or emitting error events (ties into issue #5).
+
+---
+
+### 9. TriggerEngine.evaluate() is synchronous O(n) on every event
+**File**: `src/core/trigger-engine.ts:165-239`  
+**KB**: `10-implementation-guide.md` — performance considerations  
+**Severity**: LOW  
+
+Every event emitted on the EventBus causes a full iteration over all registered triggers (line 168). With many triggers and high event throughput, this becomes a performance bottleneck. There is no indexing by event type — the `matchesPattern` function is called for every trigger on every event, even when most triggers use exact-match patterns that could be O(1) via a Map lookup.
+
+**Fix**: Partition triggers into an exact-match Map (O(1) lookup) and a patterns list (only iterated for non-exact matches). This is an optimization, not a correctness issue.
+
+---
+
+### 10. TriggerDefinition.sessionId matching uses unchecked payload cast
+**File**: `src/core/trigger-engine.ts:181`  
+**KB**: `08-extensibility.md` — custom data in _meta, not root fields  
+**Severity**: MEDIUM  
+
+The session scope check casts `event.payload` to `Record<string, unknown>` and reads `sessionId` directly from the payload root (line 181). This assumes that all events carrying a session ID store it as `payload.sessionId`. However, per KB-08, custom fields should not be at the root of protocol types — and different event sources may structure their payload differently. Additionally, there is no null-safety check beyond optional chaining: if `event.payload` is a primitive (number, string), the cast produces incorrect behavior silently.
+
+**Fix**: Either standardize on a well-known event payload shape (e.g., require `payload._meta['_goodvibes/sessionId']`), or accept a configurable session ID extractor function in the trigger definition.
+
+---
+
+## Summary
+
+| # | Issue | Severity | File |
+|---|-------|----------|------|
+| 1 | No timeout enforcement on trigger handlers | HIGH | trigger-engine.ts:227 |
+| 2 | Double-cast event type erasure | MEDIUM | trigger-engine.ts:222 |
+| 3 | Unbounded regex cache (memory leak) | MEDIUM | trigger-engine.ts:31 |
+| 4 | nextRun computed twice on schedule | LOW | scheduler.ts:93,110 |
+| 5 | Scheduler errors via console.error, not EventBus | MEDIUM | scheduler.ts:239,246 |
+| 6 | No AbortController/cancellation for handlers | MEDIUM | trigger-engine.ts:227, scheduler.ts:236 |
+| 7 | Missing handler silently skipped, no diagnostics | LOW | trigger-engine.ts:207-210 |
+| 8 | No error count observability on scheduler tasks | LOW | scheduler.ts:235-248 |
+| 9 | O(n) trigger evaluation on every event | LOW | trigger-engine.ts:165-239 |
+| 10 | Session ID matching uses unchecked payload root cast | MEDIUM | trigger-engine.ts:181 |
+
+**HIGH**: 1 | **MEDIUM**: 5 | **LOW**: 4
+
+## Overall Score: 7/10
+
+The trigger engine and scheduler are well-structured with proper error isolation (trigger handler failures don't crash the engine), correct fire-count ordering (fixed from wave 1 — increment now happens after handler validation), and good use of `_meta` for error events per KB-08. The magic number timeout issue from wave 1 has been addressed with `DEFAULT_INTERVAL_MS`. However, the lack of timeout enforcement on trigger handlers is a significant gap given the ITriggerHandler contract explicitly requires it. The missing AbortController support and inconsistent error reporting (EventBus in triggers, console.error in scheduler) reduce production readiness. The session ID matching via unchecked payload cast conflicts with KB-08's guidance on custom field placement.

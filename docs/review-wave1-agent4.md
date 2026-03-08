@@ -1,189 +1,143 @@
-# ACP Compliance Review: Permissions
+# Wave 1 Review — Agent 4: Permissions
 
-**Reviewer**: Agent 4 (Permissions Specialist)
-**Scope**: `src/extensions/acp/permission-gate.ts`, `src/types/permissions.ts`
-**KB References**: `docs/acp-knowledgebase/05-permissions.md`, `docs/acp-knowledgebase/01-overview.md`
-**ACP Spec Source**: `https://agentclientprotocol.com/llms-full.txt` (fetched 2026-03-07)
-**Score**: 5.5/10 | **Issues**: 2 critical, 4 major, 3 minor
+**Reviewer**: ACP Compliance Review Agent  
+**Files**: `src/extensions/acp/permission-gate.ts`, `src/extensions/acp/config-adapter.ts`, `src/types/permissions.ts`  
+**KB References**: `05-permissions.md`, `03-sessions.md`, `10-implementation-guide.md`  
+**Date**: 2026-03-08
 
 ---
 
 ## Issues
 
-### CRITICAL
+### 1. `description` field lost in SDK permission request construction
+**File**: `src/extensions/acp/permission-gate.ts` lines 139–149  
+**KB**: KB-05 line 100 — `description: string` is **Required** on the Permission object  
+**Severity**: High
 
-#### Issue 1: requestPermission call uses SDK-specific options/toolCall shape instead of spec-defined permission object
+`buildPermissionRequest()` constructs the SDK `toolCall` object with `title`, `status`, and `rawInput`, but never passes `request.description`. The ACP wire spec requires `description` as a mandatory field on the permission object (KB-05 lines 96–103). Even under the SDK's options-based model, description context is lost — the client has no way to show the user what action is being gated.
 
-- **File**: `src/extensions/acp/permission-gate.ts`
-- **Lines**: 175-185
-- **KB Topic**: KB-05, Wire Format (lines 27-41, 96-103); KB-01 line 224
-- **Severity**: Critical
-
-The ACP wire spec defines `session/request_permission` as:
-```json
-{ "sessionId": "...", "permission": { "type": "shell", "title": "...", "description": "..." } }
-```
-
-The implementation instead sends:
-```typescript
-this.conn.requestPermission({
-  sessionId: this.sessionId,
-  options: buildPermissionOptions(),
-  toolCall: { toolCallId, title, status: 'pending', rawInput, ... },
-});
-```
-
-This is not just a cosmetic difference -- the entire request structure is wrong relative to the spec. While documented as ISS-013/ISS-017 SDK divergence, the code has no feature flag or abstraction layer to switch to the spec format when the SDK aligns. The `permission` field containing `type`, `title`, and `description` (all required per KB-05 line 96-102) is entirely absent from the actual call.
-
-**Remediation**: Add an abstraction that constructs the spec-compliant `permission` object. Either conditionally use it based on SDK version detection, or at minimum structure the code so the spec-compliant path is ready to activate.
+**Fix**: Add `description: request.description` to the `toolCall` object, or if the SDK doesn't support it there, include it in `_meta`.
 
 ---
 
-#### Issue 2: isGranted() parses outcome-based response instead of spec-defined `{ granted: boolean }`
+### 2. `isGranted()` receives full response object but casts as `RequestPermissionOutcome`
+**File**: `src/extensions/acp/permission-gate.ts` lines 104–117, 230  
+**KB**: KB-10 lines 1029–1034 (mock client shows `{ outcome: { outcome: 'selected', optionId } }`)  
+**Severity**: High
 
-- **File**: `src/extensions/acp/permission-gate.ts`
-- **Lines**: 103-109
-- **KB Topic**: KB-05, Response format (lines 43-65, 274)
-- **Severity**: Critical
+Line 230 passes `response` (the full `RequestPermissionResponse`) to `isGranted()`. Inside `isGranted()`, line 110 casts this as `RequestPermissionOutcome`. But the SDK response shape is `{ outcome: RequestPermissionOutcome }` — meaning `response.outcome` is the `RequestPermissionOutcome`, not `response` itself. The function checks `outcome.outcome` at line 112, which would actually be `response.outcome` (the nested object), not `response.outcome.outcome`.
 
-The ACP spec response is `{ granted: boolean }`. The SDK usage in KB-05 line 296 shows:
-```typescript
-const { granted } = await this.conn.requestPermission({ ... });
-```
+This works **only if** the SDK returns the outcome directly (not wrapped). If the SDK follows the KB-10 mock pattern (`{ outcome: { outcome, optionId } }`), `isGranted(response)` would fail to find `outcome.outcome === 'cancelled'` because `response.outcome` is the inner object and `response.outcome.outcome` is the string. The cast at line 110 papers over this.
 
-The implementation instead parses `outcome.outcome === 'cancelled'` and `outcome.optionId`, which is an entirely different response model. If the SDK aligns with the wire spec in a future version, this function will break because `response.outcome` will not exist.
-
-**Remediation**: Add a version-aware response parser that checks for `response.granted` (spec path) first, falling back to `response.outcome` (current SDK path) only when the boolean field is absent.
+**Fix**: Either pass `response.outcome` to `isGranted()`, or update `isGranted()` to unwrap the response first: `const outcome = (response as any)?.outcome ?? response`.
 
 ---
 
-### MAJOR
+### 3. Sandbox mode auto-approves `file_write` — inconsistent with restrictive intent
+**File**: `src/extensions/acp/permission-gate.ts` line 61  
+**KB**: KB-05 lines 366–368 — mode semantics  
+**Severity**: Low
 
-#### Issue 3: PermissionOption type shape mismatches actual SDK usage
+The sandbox policy auto-approves `file_write` alongside `mcp`, while denying `extension`, `network`, and `browser`. The comment (line 35) describes sandbox as "isolated, unrestricted experimentation" but KB-05's mode taxonomy doesn't define a sandbox mode. Auto-approving writes in a mode named "sandbox" could surprise users expecting containment. This is an implementation choice, not a spec violation, but the semantics are potentially misleading.
 
-- **File**: `src/types/permissions.ts`
-- **Lines**: 41-46
-- **KB Topic**: KB-05, Permission object shape (lines 96-103)
-- **Severity**: Major
-
-The `PermissionOption` type defines `{ id: string; label: string }`, but `permission-gate.ts:82-83` constructs options with `{ optionId, kind, name }` using the `acp.PermissionOption` SDK type. The local type is never used in the actual permission flow -- it exists on `PermissionRequest.options` (line 81) but `PermissionGate.check()` ignores that field entirely and calls `buildPermissionOptions()` instead.
-
-This is dead code that creates a false sense of type safety.
-
-**Remediation**: Either align the local `PermissionOption` type with the SDK's actual shape (`optionId`, `kind`, `name`), or remove it if the intent is to always use the SDK type directly.
+**Fix**: Consider whether sandbox should prompt for `file_write` or document the rationale more explicitly.
 
 ---
 
-#### Issue 4: PermissionRequest.toolCall and PermissionRequest.options fields are unused
+### 4. Permission types `mcp` and `extension` not namespaced as custom types
+**File**: `src/types/permissions.ts` lines 29–30  
+**KB**: KB-05 lines 81–92, line 171 (custom type example uses `_goodvibes/spawn_agent`)  
+**Severity**: Medium
 
-- **File**: `src/types/permissions.ts`
-- **Lines**: 71-81
-- **KB Topic**: KB-05, Wire format (lines 27-41)
-- **Severity**: Major
+KB-05's custom permission type example uses the `_goodvibes/` prefix namespace (line 171). The implementation uses bare `mcp` and `extension` as permission types without namespacing. These could collide with future ACP spec-defined types. The spec says the type field is an open string, but the convention shown in KB-05 suggests namespacing custom types.
 
-`PermissionRequest.toolCall` (line 75) and `PermissionRequest.options` (line 81) are declared but never consumed by `PermissionGate.check()`. The gate constructs its own `toolCall` object from `request.title`, `request.toolCallId`, and `request._meta`, and generates options via `buildPermissionOptions()`. These unused fields add confusion about the actual data flow.
-
-**Remediation**: Remove these fields from the type, or wire them into `PermissionGate.check()` so callers can override the default options and provide structured tool call context.
+**Fix**: Consider renaming to `_goodvibes/mcp` and `_goodvibes/extension` for forward compatibility.
 
 ---
 
-#### Issue 5: Random toolCallId generation breaks spec-required linkage to tool_call update
+### 5. Config adapter mode names diverge from ACP convention
+**File**: `src/extensions/acp/config-adapter.ts` lines 60–81  
+**KB**: KB-03 lines 298–304 (modes: `ask`, `code`); KB-05 lines 366–368 (ask/code/yolo)  
+**Severity**: Medium
 
-- **File**: `src/extensions/acp/permission-gate.ts`
-- **Line**: 170
-- **KB Topic**: KB-05, Relationship to Tool Execution (lines 186-266, 419)
-- **Severity**: Major
+The ACP KB examples consistently use `ask`/`code` as mode values (KB-03 line 302). The implementation uses `justvibes`/`vibecoding`/`sandbox`/`plan`. While the spec allows arbitrary config option values, ACP clients that recognize the standard `ask`/`code` mode values for permission UI hints would not understand the GoodVibes-specific names. This reduces interoperability with generic ACP clients.
 
-KB-05 line 419: "toolCallId used in permission context should match the tool_call update sent before the request." The code generates a random UUID as fallback:
-```typescript
-const toolCallId = request.toolCallId ?? randomUUID();
-```
-
-A randomly generated `toolCallId` will not match any preceding `tool_call` update, breaking the client's ability to correlate the permission prompt with the pending tool call in its UI.
-
-**Remediation**: Make `toolCallId` required on `PermissionRequest` (not optional with random fallback), or throw/warn when it is missing to enforce the spec linkage.
+**Fix**: Either map GoodVibes modes to ACP-standard equivalents in the config options, or document the mapping so clients can adapt.
 
 ---
 
-#### Issue 6: rawInput field in toolCall is non-spec
+### 6. `plan` mode denies `shell` but spec says ask-mode should prompt, not deny
+**File**: `src/extensions/acp/permission-gate.ts` lines 55–58  
+**KB**: KB-05 line 366 — "ask mode: Agent calls session/request_permission for every gated action; user sees every prompt"  
+**Severity**: Medium
 
-- **File**: `src/extensions/acp/permission-gate.ts`
-- **Line**: 182
-- **KB Topic**: KB-05, Permission Object Shape (lines 96-103)
-- **Severity**: Major
+The `plan` policy sets `alwaysDeny: ['shell', 'file_delete']`. KB-05's ask mode definition says the agent should call `request_permission` for every gated action — meaning the user should see the prompt and have the option to approve. Always-deny removes user agency for these types. If `plan` maps to ACP ask-mode, then shell and file_delete should be prompted, not auto-denied.
 
-The permission request includes `rawInput: request._meta?.rawInput ?? null` in the `toolCall` object. The ACP spec permission object shape (KB-05 lines 96-103) defines `type`, `title`, `description`, and `_meta` -- there is no `rawInput` field. This non-spec field may cause strict clients to reject the request or silently ignore it.
-
-**Remediation**: Move `rawInput` into the `_meta` object where custom fields belong, or use the spec-defined `description` field to convey tool input details.
+**Fix**: Move `shell` and `file_delete` out of `alwaysDeny` and rely on `promptForUnknown: true` to gate them via the client.
 
 ---
 
-### MINOR
+### 7. `PermissionRequest.sessionId` field is documented as ignored but still present
+**File**: `src/types/permissions.ts` lines 72–77  
+**KB**: KB-05 lines 32–33 — `sessionId` is a required wire parameter  
+**Severity**: Low
 
-#### Issue 7: plan mode auto-approves file_write, contradicting ask-mode semantics
+The `PermissionRequest` type includes `sessionId?: string` with a comment saying it's ignored at runtime (PermissionGate uses its constructor-injected sessionId). Having an optional field that's documented as ignored creates confusion. Callers might set it expecting it to be used. Since the PermissionGate owns the session context, this field should either be removed or made truly required and read.
 
-- **File**: `src/extensions/acp/permission-gate.ts`
-- **Lines**: 52-56
-- **KB Topic**: KB-05, Mode-Based Auto-Approval (lines 362-379)
-- **Severity**: Minor
-
-The `plan` mode is documented as mapping to ACP "ask mode" (line 34). KB-05 line 366 says ask mode means "Agent calls `session/request_permission` for every gated action; user sees every prompt." Yet plan mode auto-approves `file_write`, meaning file write operations skip the permission prompt entirely.
-
-The code comment says "Auto-approve writes but not deletes" but this contradicts the ask-mode semantics the mode claims to implement.
-
-**Remediation**: Either remove `file_write` from plan mode's `autoApprove` list to match ask-mode behavior, or update the mode documentation/mapping to clarify this is a deliberate deviation from strict ask-mode.
+**Fix**: Remove `sessionId` from `PermissionRequest` since it's never read, or document it as deprecated.
 
 ---
 
-#### Issue 8: sessionId is optional on PermissionRequest but required on the wire
+### 8. No concurrent permission request serialization
+**File**: `src/extensions/acp/permission-gate.ts` (entire class)  
+**KB**: KB-05 line 418 — "Multiple concurrent permission requests are not addressed in spec; in practice serialize them per session"  
+**Severity**: Low
 
-- **File**: `src/types/permissions.ts`
-- **Lines**: 60-61
-- **KB Topic**: KB-05, Wire Format (lines 27-41)
-- **Severity**: Minor
+The `PermissionGate.check()` method has no serialization mechanism. If two tool calls trigger permission checks concurrently within the same session, both requests would be sent to the client simultaneously. KB-05 recommends serializing permission requests per session.
 
-`sessionId?: string` is optional on `PermissionRequest`, but KB-05 wire format (line 33) shows `sessionId` as a required field in the `session/request_permission` params. The `PermissionGate` class receives `sessionId` in its constructor, so this field on the request type is redundant and potentially misleading -- a caller might set it expecting it to override the gate's session, but it is never read.
-
-**Remediation**: Remove `sessionId` from `PermissionRequest` (since the gate manages it), or document explicitly that it is ignored in favor of the gate's constructor-injected value.
+**Fix**: Add a per-session mutex/queue so `check()` calls are serialized.
 
 ---
 
-#### Issue 9: description field not passed in the permission request to the SDK
+### 9. Error handling treats all non-AbortError failures as "Permission request failed"
+**File**: `src/extensions/acp/permission-gate.ts` lines 235–243  
+**KB**: KB-05 lines 67–77 — client can return JSON-RPC error with code/message  
+**Severity**: Low
 
-- **File**: `src/extensions/acp/permission-gate.ts`
-- **Lines**: 175-185
-- **KB Topic**: KB-05, Permission Object Shape (lines 96-103)
-- **Severity**: Minor
+The catch block at line 238 only distinguishes AbortError (cancelled) from everything else (generic "Permission request failed"). KB-05 shows the client can return structured errors (`{ code: -32603, message: "Internal error" }`). The current implementation discards the error details. While not a spec violation, propagating the error code/message in the `reason` field would improve debuggability.
 
-The `PermissionRequest` type includes a `description` field (types/permissions.ts:69), and the ACP spec requires `description` in the permission object (KB-05 line 100). However, `PermissionGate.check()` never passes `request.description` anywhere in the SDK call. The title is passed via `toolCall.title`, but the description -- which should contain the full detail of what will happen -- is silently dropped.
-
-**Remediation**: Include `description` in the permission request payload, either via the SDK's current format or a future spec-aligned `permission` object.
+**Fix**: Extract error message from the caught error and include it in the `reason` string.
 
 ---
 
-## Category Breakdown
+### 10. `buildPermissionOptions` hardcodes only `allow_once`/`reject_once` — no `allow_always`/`reject_always`
+**File**: `src/extensions/acp/permission-gate.ts` lines 82–87  
+**KB**: KB-10 line 1031 — mock client references `kind !== 'deny'` covering broader option kinds  
+**Severity**: Low
 
-| Category | Score | Key Issues |
-|----------|-------|------------|
-| Spec Compliance | 4/10 | Request/response shape diverges from ACP wire spec (Issues 1, 2) |
-| Type Safety | 5/10 | Dead types, shape mismatch between local and SDK types (Issues 3, 4) |
-| Data Integrity | 5/10 | Random toolCallId, dropped description (Issues 5, 9) |
-| Extensibility | 7/10 | Non-spec fields in wrong location (Issue 6) |
-| Policy Design | 7/10 | Plan mode semantics questionable (Issue 7) |
-| Documentation | 8/10 | ISS comments are thorough and well-explained |
+The `PermissionOptionKind` type in `src/types/permissions.ts` (line 41) defines four kinds: `allow_once`, `allow_always`, `reject_once`, `reject_always`. However, `buildPermissionOptions()` only offers `allow_once` and `reject_once`. This prevents users from choosing persistent permission grants ("always allow" / "always deny"), which is a common UX pattern in permission systems. The SDK supports it — the implementation artificially limits the options.
 
----
-
-## Positive Observations
-
-1. ISS-tagged divergence comments are thorough -- every SDK/spec gap is documented with issue numbers and migration notes
-2. Error handling in the catch block (lines 191-198) correctly distinguishes cancellation from unexpected errors
-3. The policy resolution order (auto-approve, always-deny, promptForUnknown, client prompt) is clean and well-documented
-4. PermissionType union is correctly open-ended with `(string & {})` to allow custom types per spec
-5. Mode policies use spec-defined permission types (file_write, file_delete, network, browser) as fixed in ISS-068
+**Fix**: Add `allow_always` and `reject_always` options, or accept custom options from the caller.
 
 ---
 
 ## Summary
 
-The permissions module has strong internal architecture (clean policy resolution, good error handling, thorough documentation of known divergences) but significant spec compliance gaps. The core issue is that the `requestPermission` call and response parsing follow the SDK's options/outcome model rather than the ACP wire spec's `permission`/`granted` model. While these gaps are documented via ISS comments, there is no abstraction layer or feature flag to facilitate migration when the SDK aligns with the spec. Additionally, several type declarations (`PermissionOption`, `toolCall`, `options` on `PermissionRequest`) are defined but unused, creating dead code that misleads about the actual data flow.
+| # | Issue | Severity | Status |
+|---|-------|----------|--------|
+| 1 | `description` field lost in permission request | High | Open |
+| 2 | `isGranted()` response unwrapping incorrect | High | Open |
+| 3 | Sandbox auto-approves `file_write` | Low | Open |
+| 4 | Custom permission types not namespaced | Medium | Open |
+| 5 | Mode names diverge from ACP convention | Medium | Open |
+| 6 | Plan mode auto-denies instead of prompting | Medium | Open |
+| 7 | Ignored `sessionId` field on PermissionRequest | Low | Open |
+| 8 | No concurrent permission request serialization | Low | Open |
+| 9 | Error details discarded in catch block | Low | Open |
+| 10 | Only once-options offered, no always-options | Low | Open |
+
+**High**: 2 | **Medium**: 3 | **Low**: 5
+
+## Overall Score: 6.5 / 10
+
+The permission system has solid architectural foundations — the policy-based gate pattern, mode mapping, and SDK divergence documentation are well done. The two high-severity issues (missing `description` field and potentially incorrect response unwrapping) are functional correctness problems that could cause client UI failures. The medium issues around naming conventions and ask-mode semantics represent interoperability risks with standard ACP clients. The low-severity items are quality improvements that don't block functionality but would improve robustness.

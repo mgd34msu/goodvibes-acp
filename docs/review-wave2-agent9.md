@@ -1,164 +1,144 @@
-# Review Wave 2 — Agent 9: Session Management Internals
+# ACP Compliance Review — Wave 2, Agent 9
+## Topic: Session Management Internals
 
-**Scope**: Memory manager, logs manager, directives queue  
-**Files reviewed**: `src/extensions/memory/manager.ts`, `src/extensions/memory/index.ts`, `src/extensions/logs/manager.ts`, `src/extensions/logs/index.ts`, `src/extensions/directives/queue.ts`, `src/extensions/directives/index.ts`, `src/types/directive.ts`  
-**KB files**: `docs/acp-knowledgebase/03-sessions.md`, `docs/acp-knowledgebase/04-prompt-turn.md`  
-**ACP spec**: https://agentclientprotocol.com/llms-full.txt (fetched 2026-03-07)  
-**Iteration**: 3  
-**Score**: 8.2 / 10
+**Files Reviewed:**
+- `src/extensions/memory/manager.ts`
+- `src/extensions/logs/manager.ts`
+- `src/extensions/directives/queue.ts`
+- `src/extensions/directives/index.ts`
+
+**KB References:** `03-sessions.md`, `08-extensibility.md`
 
 ---
 
 ## Issues
 
-### 1. Directives have no `sessionId` field — cannot be scoped to ACP sessions
+### 1. [MEDIUM] LogsManager.prependEntry — TOCTOU race on file writes
+**File:** `src/extensions/logs/manager.ts`, lines 81-117
+**KB Topic:** Session data integrity, concurrent access
 
-| Field | Value |
-|-------|-------|
-| **File** | `src/types/directive.ts` |
-| **Line** | 29-46 |
-| **KB topic** | 03-sessions.md: Session ID — "The sessionId returned by session/new is used in: session/prompt, session/cancel, session/load, session/update" |
-| **ACP spec** | All session-scoped operations require a `sessionId`. The `Directive` type has `workId` and `target` but no `sessionId`, making it impossible to cancel or isolate directives per ACP session. |
-| **Severity** | Major |
+The `prependEntry` helper reads the file, then writes the modified content. If two concurrent log writes target the same file (e.g., two agents logging activity simultaneously), the second write will silently overwrite the first entry. No file lock, atomic rename, or append-only strategy is used.
 
-**Fix**: Add `sessionId: string` to the `Directive` type and use it in `DirectiveQueue.drain()` filtering.
+**Recommendation:** Use an in-process write queue per file path, or switch to append-only writes (newest entries at end) to eliminate the read-modify-write pattern.
 
 ---
 
-### 2. DirectiveQueue has no session isolation — all sessions share one queue
+### 2. [MEDIUM] LogsManager.ensureFiles called on every write
+**File:** `src/extensions/logs/manager.ts`, lines 158-180
+**KB Topic:** Performance, session lifecycle
 
-| Field | Value |
-|-------|-------|
-| **File** | `src/extensions/directives/queue.ts` |
-| **Line** | 85-96 |
-| **KB topic** | 03-sessions.md: "Multiple independent sessions can coexist with the same Agent" |
-| **ACP spec** | Sessions are independent conversation contexts. A single shared `DirectiveQueue` with no session partitioning means `session/cancel` on one session could inadvertently affect directives from another session if drained without filtering. |
-| **Severity** | Major |
+Every call to `logActivity()`, `logDecision()`, and `logError()` invokes `ensureFiles()`, which performs `mkdir` + three `readFile` existence checks. This is redundant after the first call and adds unnecessary filesystem overhead on every log write.
 
-**Fix**: Either maintain per-session queues or require `sessionId` in `DirectiveFilter` and enforce session isolation in `process()`.
+**Recommendation:** Track initialization state with a boolean flag or `Promise` and skip `ensureFiles()` after the first successful call.
 
 ---
 
-### 3. DirectiveQueue.process() silently drops reentrancy without notification
+### 3. [MEDIUM] LogsManager — no sessionId on log entries
+**File:** `src/extensions/logs/manager.ts`, lines 22-59
+**KB Topic:** `03-sessions.md` — session isolation, session ID required on all session-scoped operations
 
-| Field | Value |
-|-------|-------|
-| **File** | `src/extensions/directives/queue.ts` |
-| **Line** | 227 |
-| **KB topic** | 04-prompt-turn.md: Cancellation — "Agent MUST respond to the original session/prompt request" |
-| **ACP spec** | When `session/cancel` triggers directive processing and `process()` is already running, it silently returns `[]`. The caller receives no indication that directives were not processed, which could cause the Agent to fail to respond to a cancelled `session/prompt` as required by the spec. |
-| **Severity** | Minor |
+ACP sessions are identified by `sessionId` (KB 03-sessions, line 164-171). The `ActivityEntry`, `DecisionEntry`, and `ErrorEntry` types lack a `sessionId` field. In a multi-session runtime, log entries cannot be attributed to specific sessions, making debugging and audit impossible.
 
-**Fix**: Either throw an error, emit an event (`directive:reentrancy-blocked`), or return a result indicating the reentrancy guard fired.
+**Recommendation:** Add `sessionId: string` to all entry types and include it in formatted output.
 
 ---
 
-### 4. Logs manager has no session scoping — entries cannot be attributed to ACP sessions
+### 4. [LOW] MemoryManager.save() — no validation before write
+**File:** `src/extensions/memory/manager.ts`, lines 195-202
+**KB Topic:** Data integrity, persistence
 
-| Field | Value |
-|-------|-------|
-| **File** | `src/extensions/logs/manager.ts` |
-| **Line** | 22-59 |
-| **KB topic** | 03-sessions.md: "Each session maintains its own context, conversation history, and state" |
-| **ACP spec** | ACP sessions are independent contexts. `ActivityEntry`, `DecisionEntry`, and `ErrorEntry` have no `sessionId` field, making it impossible to trace log entries back to the session that produced them. For a multi-session Agent, logs become an undifferentiated stream. |
-| **Severity** | Minor |
+`save()` writes the in-memory store directly to disk without validating the data structure. A corrupted in-memory state (e.g., `decisions` set to `null` by a buggy caller) would persist a broken file, making future `load()` calls fail.
 
-**Fix**: Add optional `sessionId?: string` field to all entry types so logs can be filtered or attributed per session.
+**Recommendation:** Validate the store shape (arrays exist, schema version present) before serializing.
 
 ---
 
-### 5. LogsManager.ensureFiles() called on every log write — redundant I/O
+### 5. [LOW] MemoryManager.load() — JSON.parse error lacks file path context
+**File:** `src/extensions/memory/manager.ts`, lines 152-186
+**KB Topic:** Error handling, observability
 
-| Field | Value |
-|-------|-------|
-| **File** | `src/extensions/logs/manager.ts` |
-| **Line** | 158-180 |
-| **KB topic** | 04-prompt-turn.md: Agent processing lifecycle — tool calls may produce many log entries per turn |
-| **ACP spec** | During a prompt turn, multiple tool calls and LLM round-trips may occur. Each `logActivity()`, `logDecision()`, and `logError()` call invokes `ensureFiles()` which does 3 `readFile` checks plus potential `mkdir`. In a busy turn this is wasteful I/O on every single log write. |
-| **Severity** | Minor |
+When `JSON.parse` throws (malformed JSON), the raw SyntaxError propagates without the file path. In a runtime managing multiple memory stores, the operator cannot determine which file is corrupted.
 
-**Fix**: Track initialization state with a boolean flag; call `ensureFiles()` once, then skip on subsequent calls.
-
----
-
-### 6. LogsManager.prependEntry() has a TOCTOU race on concurrent writes
-
-| Field | Value |
-|-------|-------|
-| **File** | `src/extensions/logs/manager.ts` |
-| **Line** | 81-117 |
-| **KB topic** | 04-prompt-turn.md: "Multiple tool calls and LLM round-trips may occur within a single turn" |
-| **ACP spec** | The `prependEntry` function reads the file, then writes the file in two separate operations with no locking. If two log entries are written concurrently (e.g., parallel tool calls in a turn), one write will overwrite the other. |
-| **Severity** | Minor |
-
-**Fix**: Use a write queue or mutex to serialise file writes, or use `appendFile` instead of read-then-write.
+**Recommendation:** Catch `SyntaxError` separately and wrap it with the file path:
+```typescript
+catch (err) {
+  if (err instanceof SyntaxError) {
+    throw new Error(`Failed to parse ${filePath}: ${err.message}`);
+  }
+  // ... existing ENOENT handling
+}
+```
 
 ---
 
-### 7. MemoryManager.load() throws opaque error on malformed JSON
+### 6. [MEDIUM] DirectiveQueue.clear() does not flush _pending buffer
+**File:** `src/extensions/directives/queue.ts`, lines 207-210
+**KB Topic:** Session lifecycle, directive cleanup
 
-| Field | Value |
-|-------|-------|
-| **File** | `src/extensions/memory/manager.ts` |
-| **Line** | 153-154 |
-| **KB topic** | 03-sessions.md: Session persistence and resumption |
-| **ACP spec** | When `memory.json` contains invalid JSON, `JSON.parse` throws a generic `SyntaxError`. The catch block only handles `ENOENT`; all other errors (including parse errors) propagate with no additional context about which file failed or what went wrong, making debugging difficult for session resumption failures. |
-| **Severity** | Minor |
+`clear()` empties the main `_queue` but does not clear the `_pending` buffer. If `clear()` is called during an active `process()` cycle, buffered directives in `_pending` will be re-enqueued on the next loop iteration of `process()`, violating the caller's intent to clear all directives.
 
-**Fix**: Catch `SyntaxError` separately, wrap it with the file path and a descriptive message, then re-throw or reset to empty store with a warning event.
+**Recommendation:** Also clear `this._pending = []` inside `clear()`.
 
 ---
 
-### 8. Directives barrel export omits types needed by consumers
+### 7. [LOW] DirectiveQueue — no max queue size or backpressure
+**File:** `src/extensions/directives/queue.ts`, lines 112-121
+**KB Topic:** Resource management, session stability
 
-| Field | Value |
-|-------|-------|
-| **File** | `src/extensions/directives/index.ts` |
-| **Line** | 6 |
-| **KB topic** | 03-sessions.md: session/cancel — Agents must handle cancellation |
-| **ACP spec** | The barrel file only exports `DirectiveQueue`. Consumers (e.g., `src/extensions/wrfc/handlers.ts`) must import `Directive`, `DirectiveFilter`, and `DirectiveResult` directly from `../../types/directive.js` instead of through the extension barrel. This breaks the layer abstraction since L2 consumers should use the L2 barrel. |
-| **Severity** | Nitpick |
+The queue accepts unlimited directives with no upper bound. A misbehaving directive source (or a stuck handler in `process()`) could cause unbounded memory growth. ACP sessions should be resilient to resource exhaustion.
 
-**Fix**: Add `export type { Directive, DirectiveFilter, DirectiveResult, DirectivePriority } from '../../types/directive.js';` to the barrel.
+**Recommendation:** Accept an optional `maxSize` in the constructor; reject or drop-oldest when exceeded.
 
 ---
 
-### 9. MemoryManager session cleanup not wired to session/cancel
+### 8. [LOW] MemoryManager — unbounded array growth in persistent store
+**File:** `src/extensions/memory/manager.ts`, lines 212-298
+**KB Topic:** Resource management, persistence
 
-| Field | Value |
-|-------|-------|
-| **File** | `src/extensions/memory/manager.ts` |
-| **Line** | 118-126 |
-| **KB topic** | 04-prompt-turn.md: Cancellation — "Agent SHOULD stop all language model requests and all tool call invocations as soon as possible" |
-| **ACP spec** | `clearSession()` is wired to `session:destroyed` but not to `session/cancel`. Per ACP, cancellation should abort operations. If a cancelled session still has pending session-scoped memory writes (via `setForSession`), those writes persist until `session:destroyed`, potentially causing stale data to be visible between cancel and destroy. |
-| **Severity** | Nitpick |
+All `add*` methods push to arrays without any size limit or eviction policy. Over long-running deployments, the `memory.json` file will grow without bound. The `save()` call will eventually become slow or fail due to file size.
 
-**Fix**: Evaluate whether `session/cancel` should also trigger `clearSession()`, or document that session-scoped data intentionally survives cancellation.
+**Recommendation:** Implement a configurable max-records-per-category with FIFO eviction, or archive old records to separate files.
 
 ---
 
-### 10. MemoryManager.save() does not validate store integrity before writing
+### 9. [LOW] LogsManager — no machine-parseable log format
+**File:** `src/extensions/logs/manager.ts`, lines 186-265
+**KB Topic:** `08-extensibility.md` — interoperability, observability
 
-| Field | Value |
-|-------|-------|
-| **File** | `src/extensions/memory/manager.ts` |
-| **Line** | 195-202 |
-| **KB topic** | 03-sessions.md: Session persistence and resumption |
-| **ACP spec** | `save()` writes whatever is in `_store` to disk without validating that the arrays contain well-formed records. If a bug corrupts `_store` (e.g., pushing `undefined` into `decisions`), the corrupted state is persisted and will cause `load()` to fail on the next session, breaking session resumption. |
-| **Severity** | Nitpick |
+Logs are written exclusively as Markdown. While human-readable, there is no structured format (JSON, NDJSON) that external tools, dashboards, or the `_goodvibes/analytics` extension method could consume programmatically. The `_meta` extensibility pattern from KB 08 suggests structured data is expected for tool interop.
 
-**Fix**: Add a lightweight validation step before serialization (e.g., check each array contains objects with required `id` fields) or use a schema validator.
+**Recommendation:** Emit a parallel NDJSON log stream (or at minimum, emit structured event payloads via EventBus that consumers can serialize).
+
+---
+
+### 10. [LOW] MemoryManager — session-scoped store not included in save/load
+**File:** `src/extensions/memory/manager.ts`, lines 362-406
+**KB Topic:** `03-sessions.md` — session persistence and resumption
+
+The session-scoped key-value store (`_sessionStore`) is explicitly documented as in-memory only. However, KB 03-sessions describes `session/load` for resuming sessions. If a session is resumed after a runtime restart, all session-scoped memory is lost with no mechanism to restore it. The `clearSession` handler on `session:destroyed` is correct for cleanup, but there is no corresponding persistence path for `session/load` resumption.
+
+**Recommendation:** Either document this as intentional (ephemeral session state) or provide an opt-in persistence mechanism for session-scoped data that should survive restarts.
 
 ---
 
 ## Summary
 
-| Severity | Count |
-|----------|-------|
-| Critical | 0 |
-| Major | 2 |
-| Minor | 5 |
-| Nitpick | 3 |
-| **Total** | **10** |
+| # | Severity | File | Issue |
+|---|----------|------|-------|
+| 1 | MEDIUM | logs/manager.ts | prependEntry TOCTOU race |
+| 2 | MEDIUM | logs/manager.ts | ensureFiles on every write |
+| 3 | MEDIUM | logs/manager.ts | No sessionId on log entries |
+| 4 | LOW | memory/manager.ts | save() without validation |
+| 5 | LOW | memory/manager.ts | JSON.parse error lacks file path |
+| 6 | MEDIUM | directives/queue.ts | clear() skips _pending buffer |
+| 7 | LOW | directives/queue.ts | No max queue size |
+| 8 | LOW | memory/manager.ts | Unbounded array growth |
+| 9 | LOW | logs/manager.ts | No machine-parseable format |
+| 10 | LOW | memory/manager.ts | Session store not persisted for session/load |
 
-The code is well-structured with clean separation of concerns, proper event bus integration, and good TypeScript typing. The two major issues both relate to the same root cause: the directive and logging subsystems were designed as singleton/global constructs but ACP requires per-session isolation. The memory manager handles this correctly with its `_sessionStore` Map, but the directive queue and logs manager do not follow the same pattern. The minor issues are standard robustness concerns (race conditions, error handling, redundant I/O) that would surface under production load.
+**MEDIUM issues:** 4
+**LOW issues:** 6
+
+## Overall Score: 7/10
+
+The session management internals are functionally correct and well-structured with clean layer separation. The `DirectiveQueue` now properly supports `sessionId` filtering (addressing a prior review finding). The `MemoryManager` has good migration support and session cleanup via EventBus. However, several concurrency and robustness gaps remain: the TOCTOU race in log writes is the most operationally concerning, the missing `_pending` flush in `clear()` is a correctness bug, and the lack of `sessionId` on log entries undermines multi-session observability required by the ACP session model.

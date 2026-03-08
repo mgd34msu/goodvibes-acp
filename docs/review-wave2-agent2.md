@@ -1,77 +1,151 @@
-# Wave 2 — Agent 2: Config & State Machine Review
+# Wave 2 Review — Agent 2: StateMachine & Stores
 
-**Reviewer**: goodvibes:reviewer  
-**Iteration**: 3  
-**Date**: 2026-03-07  
-**Scope**: `src/core/state-machine.ts`, `src/core/state-store.ts`, `src/core/versioned-store.ts`, `src/core/utils.ts`  
-**KB Topics**: 02-initialization, 08-extensibility  
-**ACP Spec**: https://agentclientprotocol.com/llms-full.txt  
-
----
-
-## Score: 8.4/10 | Issues: 0 critical, 2 major, 4 minor, 2 nitpick
-
----
-
-## Reality Check Results
-
-| Check | Status | Notes |
-|-------|--------|-------|
-| Files exist | PASS | All 4 source files present on disk |
-| Exports used | PASS | All exports imported via `src/core/index.ts`; `StateMachine` used by `wrfc/machine.ts`; `StateStore` used by `acp/agent.ts`, `sessions/manager.ts`; `deepMerge` used by `state-store.ts`; `versioned-store` exports used by `config.ts` |
-| Import chain valid | PASS | All modules reachable through `src/core/index.ts` -> `src/main.ts` |
-| No placeholders | PASS | No TODO/FIXME/placeholder stubs found |
-| Integration verified | PASS | All files are imported and actively used in the runtime |
+**Reviewer:** ACP Compliance Review Agent (Iteration 4, Phase 2)  
+**Scope:** `src/core/state-machine.ts`, `src/core/state-store.ts`, `src/core/versioned-store.ts`, `src/core/queue.ts`  
+**KB References:** `03-sessions.md` (session lifecycle/persistence), `08-extensibility.md` ($schema conventions), `10-implementation-guide.md` (state management patterns)  
+**Known Prior Issues:** restore() bypasses _notifyChange (FIXED), restore() ignores $schema (FIXED in StateStore), can() ignores guards, state validation
 
 ---
 
 ## Issues
 
-### Major
+### 1. StateMachine.can() Ignores Guards — Misleading for Lifecycle Checks
 
-| # | File | Line(s) | KB Topic | Issue |
-|---|------|---------|----------|-------|
-| 1 | `src/core/state-store.ts` | 233-243 | 02-initialization | **`restore()` skips `$schema` version validation.** The method accepts any `SerializedState` and blindly loads it without checking whether `$schema` matches `STATE_SCHEMA_VERSION` ("1.0.0"). ACP KB-02 mandates protocol version negotiation where the agent MUST validate version compatibility before proceeding. If persisted state was serialized with a future schema version (e.g., after a code rollback), restoring it could silently corrupt state. **Fix**: Check `state.$schema` against `STATE_SCHEMA_VERSION` and throw or migrate when they differ. |
-| 2 | `src/core/state-store.ts` | 233-243 | 08-extensibility | **`restore()` does not fire change events.** When state is restored from a snapshot, the method silently replaces all internal state via `this._state.clear()` + rebuild without calling `_notifyChange()`. Any `onChange` subscribers (e.g., the ACP extensions layer, analytics, or persistence hooks) will be unaware that state changed. This breaks the observable contract that `onChange` fires on every mutation. **Fix**: Fire change events for each key during restore, or fire a bulk "restore" event that subscribers can handle. |
+**File:** `src/core/state-machine.ts`, line 243-250  
+**KB Topic:** Session lifecycle (03-sessions.md) — session state transitions must respect guards  
+**Severity:** Medium
 
-### Minor
+`can()` explicitly skips guard evaluation (documented in JSDoc line 238). When used for ACP session lifecycle (e.g., "can this session accept a prompt?"), a `true` return does not mean the transition will succeed. Callers must call `transition()` and check the boolean, making `can()` a footgun for any code that uses it as a pre-check before performing expensive work.
 
-| # | File | Line(s) | KB Topic | Issue |
-|---|------|---------|----------|-------|
-| 3 | `src/core/state-machine.ts` | 243-250 | 02-initialization | **`can()` does not evaluate guards, but callers may expect it to.** The method checks if a transition exists structurally but ignores guard conditions. The JSDoc at line 240 states "Does NOT fire guards" but this is easy to miss. In an ACP initialization flow where capability guards determine valid transitions, `can()` returning `true` for a guarded-out transition could cause incorrect UI or logic branching. **Fix**: Either add a `canStrict()` that evaluates guards, or rename `can()` to `hasTransition()` to make the semantics unambiguous. |
-| 4 | `src/core/state-machine.ts` | 156-165, 186-193 | 08-extensibility | **Async lifecycle hooks are fire-and-forget.** `onEnter`/`onExit` hooks that return Promises have their rejections caught and logged to `console.error`, but the transition proceeds regardless. If an extension hook (e.g., a `_goodvibes/status` notification emitter) fails during a state transition, the failure is silently swallowed. This makes it impossible for extension code to abort or retry a transition. **Fix**: Consider an option to make the state machine await hooks and propagate errors, or at minimum emit hook failures through a structured error channel rather than `console.error`. |
-| 5 | `src/core/state-store.ts` | 257-265 | 08-extensibility | **`_notifyChange` swallows listener errors silently.** The empty `catch {}` block at line 261 means a failing onChange listener produces no diagnostic output at all. Per ACP KB-08, extension code attaches to protocol types via hooks; if a `_goodvibes/*` extension listener throws, there is zero observability. **Fix**: Log the error to `console.error` (matching the pattern used in `state-machine.ts`), or emit to a structured error handler. |
-| 6 | `src/core/versioned-store.ts` | 31-39 | 02-initialization | **`isVersioned()` does not validate semver format.** The guard only checks that `$schema` is a string and `data` exists, but does not verify the string is a valid semver (e.g., it would accept `"banana"` as a valid schema version). ACP KB-02 defines protocol versions as integers and serialized schemas as semver strings. Allowing arbitrary strings could mask version mismatches. **Fix**: Add a basic semver format check (e.g., `/^\d+\.\d+\.\d+/`) or document that validation is the caller's responsibility. |
-
-### Nitpick
-
-| # | File | Line(s) | KB Topic | Issue |
-|---|------|---------|----------|-------|
-| 7 | `src/core/utils.ts` | 36 | 08-extensibility | **`deepMerge` skips `undefined` source values, preventing key deletion.** When `srcVal` is `undefined`, the key is not written to the result (line 36: `if (srcVal !== undefined)`). This means `StateStore.merge()` cannot be used to remove keys from nested objects. For extensibility scenarios where `_meta` fields need to be cleared, this is a limitation. **Fix**: Document this behavior explicitly, or add a sentinel value (e.g., `Symbol`) for deletion. |
-| 8 | `src/core/state-machine.ts` | 370-378 | 02-initialization | **`restore()` does not validate that `data.current` is a valid state in the config.** If serialized data contains a state name that no longer exists in the config (e.g., after a code change removed a state), the restored machine will be in an invalid state with no transitions available. **Fix**: Validate `data.current` against `config.states` keys and throw if invalid. |
+**Recommendation:** Add a `canStrict(event)` that evaluates guards, or add an optional `{ checkGuards: boolean }` parameter to `can()`.
 
 ---
 
-## Category Breakdown
+### 2. StateMachine.restore() Does Not Validate $schema Version
 
-| Category | Score | Deductions | Key Issues |
-|----------|-------|------------|------------|
-| Security | 10/10 | 0 | No secrets, no injection vectors, no external input handling |
-| Error Handling | 7/10 | -3.0 | Silent error swallowing (#5), fire-and-forget async (#4) |
-| Testing | N/A | — | Tests not in scope for this review |
-| Organization | 9/10 | -1.0 | Clean separation, good barrel exports |
-| Performance | 9/10 | -1.0 | History array shift() is O(n) but bounded by historyLimit |
-| SOLID/DRY | 9/10 | -1.0 | Transition matching logic duplicated between `transition()` and `can()` |
-| Naming | 9/10 | -1.0 | `can()` semantics are ambiguous (#3) |
-| Maintainability | 8/10 | -2.0 | No version validation on restore (#1, #6, #8) |
-| Documentation | 9/10 | -1.0 | Good JSDoc throughout, minor gap on guard behavior |
-| Dependencies | 10/10 | 0 | Zero external deps, clean L1 layering |
+**File:** `src/core/state-machine.ts`, line 370-386  
+**KB Topic:** Schema versioning for persistence (08-extensibility.md)  
+**Severity:** Medium
+
+`StateStore.restore()` correctly validates `$schema` against `STATE_SCHEMA_VERSION` and throws on mismatch (lines 236-240). However, `StateMachine.restore()` accepts any `$schema` value without validation. If a serialized state machine from a future or incompatible schema version is loaded, it will silently produce undefined behavior.
+
+**Recommendation:** Add schema version validation matching the pattern in `StateStore.restore()`.
 
 ---
 
-## Recommendations
+### 3. StateMachine Async Hooks Are Fire-and-Forget
 
-1. **This PR**: Add `$schema` validation to `StateStore.restore()` and `StateMachine.restore()` to prevent silent data corruption on version mismatches.
-2. **This PR**: Add `console.error` logging to the empty `catch {}` in `StateStore._notifyChange()` for parity with `state-machine.ts` error handling.
-3. **Follow-up**: Consider an `onError` callback mechanism for both `StateMachine` and `StateStore` to replace `console.error` with structured error reporting suitable for ACP extension observability.
-4. **Follow-up**: Evaluate whether `deepMerge` should support explicit key deletion for `_meta` field management in ACP extensibility scenarios.
+**File:** `src/core/state-machine.ts`, lines 160-165, 173-176, 188-192, 199-203, 222-227  
+**KB Topic:** Session lifecycle reliability (03-sessions.md — session state consistency)  
+**Severity:** Medium
+
+`onEnter`, `onExit`, and `onTransition` handlers that return Promises have their rejections caught but their resolutions are not awaited. The `transition()` method returns `boolean` synchronously while async hooks may still be running. For ACP session lifecycle hooks (e.g., persisting session state on exit, cleaning up MCP connections), this means the caller has no guarantee that side effects have completed before proceeding.
+
+**Recommendation:** Consider an async `transitionAsync()` variant that awaits all hooks, or document the fire-and-forget contract prominently so L2/L3 consumers are aware.
+
+---
+
+### 4. StateMachine.reset() Does Not Fire Lifecycle Hooks
+
+**File:** `src/core/state-machine.ts`, lines 341-345  
+**KB Topic:** Session lifecycle (03-sessions.md — session cleanup)  
+**Severity:** Low
+
+`reset()` directly sets `_current` to `initial` and clears history without firing `onExit` for the current state or `onEnter` for the initial state. If reset is used during ACP session teardown, registered cleanup hooks will be silently skipped.
+
+**Recommendation:** Either fire lifecycle hooks during reset, or rename to `hardReset()` and add a `reset()` that transitions properly.
+
+---
+
+### 5. StateMachine.context() Returns Mutable Reference
+
+**File:** `src/core/state-machine.ts`, lines 267-269  
+**KB Topic:** State integrity (10-implementation-guide.md — state management)  
+**Severity:** Low
+
+`context()` returns the internal `_context` reference directly (the JSDoc at line 263 acknowledges this). External code can mutate context without going through `updateContext()`, bypassing any future change tracking or validation. `serialize()` correctly copies context (line 356), but runtime access is unprotected.
+
+**Recommendation:** Return a frozen shallow copy, or accept the trade-off and ensure all L2/L3 consumers use `updateContext()` exclusively.
+
+---
+
+### 6. Queue.restore() Does Not Validate $schema Version
+
+**File:** `src/core/queue.ts`, lines 188-194  
+**KB Topic:** Schema versioning for persistence (08-extensibility.md)  
+**Severity:** Medium
+
+Same pattern as StateMachine — `Queue.restore()` accepts serialized data without checking `$schema` against `QUEUE_SCHEMA_VERSION`. Inconsistent with `StateStore.restore()` which correctly validates.
+
+**Recommendation:** Add `if (data.$schema !== QUEUE_SCHEMA_VERSION) throw new Error(...)` before restoring entries.
+
+---
+
+### 7. Queue Has No Size Limit or Backpressure
+
+**File:** `src/core/queue.ts`, entire class  
+**KB Topic:** Resource management (10-implementation-guide.md — runtime stability)  
+**Severity:** Low
+
+The Queue has no `maxSize` option. In an ACP runtime processing directives, prompts, or agent tasks, an unbounded queue can grow without limit if producers outpace consumers. `StateMachine` has `historyLimit` (line 41) for its history buffer, but Queue has no equivalent.
+
+**Recommendation:** Add an optional `maxSize` config with configurable overflow behavior (reject, drop-oldest, or callback).
+
+---
+
+### 8. Queue.restore() Re-enqueues Items (Sequence Numbers Reset)
+
+**File:** `src/core/queue.ts`, lines 188-194  
+**KB Topic:** State persistence fidelity (03-sessions.md — session/load must replay faithfully)  
+**Severity:** Low
+
+`Queue.restore()` calls `enqueue()` for each item, which assigns new sequence numbers via `_seqCounter++`. While items with different priorities will be correctly ordered, the internal `seq` values will differ from the original. This is fine for correctness but means serialized-then-restored queues are not byte-identical to the original — relevant if any code compares or hashes queue state.
+
+**Recommendation:** Minor — document that restore produces semantically equivalent but not identical internal state.
+
+---
+
+### 9. VersionedStore isVersioned() Does Not Validate $schema Format
+
+**File:** `src/core/versioned-store.ts`, lines 31-39  
+**KB Topic:** Schema versioning conventions (08-extensibility.md)  
+**Severity:** Low
+
+`isVersioned()` checks that `$schema` is a string but does not validate it as a semver string (the JSDoc at line 29 notes this). An object with `{ $schema: "", data: null }` passes the guard. While this is intentionally loose for flexibility, it means consumers must validate the version string themselves after unwrapping.
+
+**Recommendation:** Minor — either add optional semver validation or document that callers must validate version format.
+
+---
+
+### 10. StateStore.clear() Fires Individual Change Events Before Deletion
+
+**File:** `src/core/state-store.ts`, lines 174-192  
+**KB Topic:** State consistency during bulk operations  
+**Severity:** Low
+
+When clearing a namespace, `clear()` fires `_notifyChange` for each key individually (with `newValue: undefined`) before calling `this._state.delete(namespace)`. During notification, the namespace still exists in `_state` with its remaining keys. This is correct behavior but means listeners see a partially-cleared namespace mid-iteration. For ACP session teardown with many state keys, this could trigger expensive intermediate reactions.
+
+**Recommendation:** Consider a batch notification pattern (e.g., `onBulkChange`) or fire notifications after deletion is complete.
+
+---
+
+## Summary
+
+| # | File | Issue | Severity |
+|---|------|-------|----------|
+| 1 | state-machine.ts:243 | `can()` ignores guards — misleading for lifecycle | Medium |
+| 2 | state-machine.ts:370 | `restore()` skips $schema validation | Medium |
+| 3 | state-machine.ts:160 | Async hooks fire-and-forget | Medium |
+| 4 | state-machine.ts:341 | `reset()` skips lifecycle hooks | Low |
+| 5 | state-machine.ts:267 | `context()` returns mutable reference | Low |
+| 6 | queue.ts:188 | `restore()` skips $schema validation | Medium |
+| 7 | queue.ts (class) | No size limit / backpressure | Low |
+| 8 | queue.ts:188 | `restore()` resets sequence numbers | Low |
+| 9 | versioned-store.ts:31 | `isVersioned()` no semver validation | Low |
+| 10 | state-store.ts:174 | `clear()` fires individual events mid-deletion | Low |
+
+**Prior issues status:** restore() bypassing _notifyChange — FIXED. restore() ignoring $schema in StateStore — FIXED. can() ignoring guards — STILL PRESENT. State validation on restore in StateMachine — FIXED (state validated, but $schema still not validated).
+
+## Overall Score: 7.5 / 10
+
+The core primitives are well-structured with clean APIs, proper TypeScript generics, and good separation of concerns. The StateStore has been improved with $schema validation and change notifications on restore. However, the StateMachine and Queue still lack $schema validation on restore (inconsistent with StateStore), `can()` remains misleading without guard evaluation, and the fire-and-forget async hook pattern creates reliability gaps for ACP session lifecycle management. The issues are concentrated in persistence safety and lifecycle hook completeness rather than fundamental design problems.

@@ -1,97 +1,100 @@
 # Wave 1 Agent 1: Types & Transport Layer
 
-## ACP Compliance Score: 8.2/10
+**ACP Compliance Score**: 6/10
+**Issues Found**: 8 (2C, 3M, 2m, 1N)
 
-## Issues Found: 7
+## Issues
 
----
+### 1. AcpSessionUpdateType discriminator values are wrong (KB-04, KB-09: Session Updates)
+**Severity**: Critical
+**File**: `src/types/events.ts`
+**Lines**: 263-273
+**Description**: The `AcpSessionUpdateType` union contains several incorrect discriminator values that do not match the SDK's `SessionUpdate` type. The SDK uses `sessionUpdate` as the discriminator field with these values:
+- `user_message_chunk` (missing from our type)
+- `agent_message_chunk` (correct)
+- `agent_thought_chunk` (correct)
+- `tool_call` (correct)
+- `tool_call_update` (correct)
+- `plan` (correct)
+- `available_commands_update` (our type has `available_commands` — wrong)
+- `current_mode_update` (our type has `current_mode` — wrong)
+- `config_option_update` (our type has `config_option` — wrong)
+- `session_info_update` (our type has `session_info` — wrong)
+- `usage_update` (missing from our type)
+- `finish` (our type includes this but SDK does not define it)
 
-### Issue 1
+Five values have incorrect suffixes (missing `_update`), one phantom value (`finish`) exists, and two valid values are missing (`user_message_chunk`, `usage_update`).
 
+**Remediation**: Replace the `AcpSessionUpdateType` union with:
+```typescript
+export type AcpSessionUpdateType =
+  | 'user_message_chunk'
+  | 'agent_message_chunk'
+  | 'agent_thought_chunk'
+  | 'tool_call'
+  | 'tool_call_update'
+  | 'plan'
+  | 'available_commands_update'
+  | 'current_mode_update'
+  | 'config_option_update'
+  | 'session_info_update'
+  | 'usage_update';
+```
+
+### 2. ToolCallStatus uses 'running' instead of SDK's 'in_progress' (KB-06, KB-09: Tool Calls)
+**Severity**: Critical
+**File**: `src/types/events.ts` (and any consumers)
+**Lines**: 263-273 (referenced in KB-06 prose)
+**Description**: KB-06 defines `ToolCallStatus = 'pending' | 'running' | 'completed' | 'failed'` but the authoritative SDK (`types.gen.d.ts` line 2963) defines `ToolCallStatus = 'pending' | 'in_progress' | 'completed' | 'failed'`. Per the instructions, the SDK is authoritative over KB prose. While `src/types/events.ts` doesn't directly define `ToolCallStatus`, the KB-06 prose value `running` is used throughout the codebase (e.g., in `src/extensions/acp/tool-call-emitter.ts` and KB-01 line 165). Any runtime code emitting `status: 'running'` will produce non-compliant ACP wire messages. Clients expect `'in_progress'`, not `'running'`.
+
+**Remediation**: Define a canonical `ToolCallStatus` type in `src/types/events.ts` using the SDK values (`'pending' | 'in_progress' | 'completed' | 'failed'`) and update all consumers to use `'in_progress'` instead of `'running'`.
+
+### 3. SessionConfigOption.options is optional but SDK requires it (KB-03, KB-09: Config Options)
 **Severity**: Major
 **File**: `src/types/config.ts`
-**Line**: 105
-**KB Topic**: Session Config Options (KB-01 lines 297-305)
-**Description**: `SessionConfigOption.currentValue` is typed as `string` but the ACP spec defines it as `string | boolean`. Boolean-type config options (e.g., `type: 'boolean'`) cannot represent their current value correctly.
-**ACP Requirement**: KB-01 line 302 specifies `currentValue: string | boolean` in the `ConfigOption` interface. The `type` field supports `'boolean'` (line 301), requiring boolean values.
-**Suggested Fix**: Change line 105 from `currentValue: string;` to `currentValue: string | boolean;`
+**Lines**: 119-120
+**Description**: The `SessionConfigOption` type declares `options?: SessionConfigOptionChoice[]` (optional). The SDK's `SessionConfigSelect` type requires `options: SessionConfigSelectOptions` (non-optional). Since `SessionConfigOption.type` is restricted to `'select'`, options should always be present. Sending a `configOption` without `options` would violate the SDK schema.
 
----
+**Remediation**: Change `options?:` to `options:` (remove the `?`).
 
-### Issue 2
-
+### 4. MCPServerConfig stdio variant requires 'type: stdio' but SDK omits type for stdio (KB-03, KB-09: MCP Servers)
 **Severity**: Major
-**File**: `src/types/events.ts`
-**Line**: 272
-**KB Topic**: Session Update Types (KB-01 lines 202-215, KB-09 lines 915-924)
-**Description**: The `AcpSessionUpdateType` union includes `'config_options_update'` but the ACP spec uses `'config_option'` (singular, no `_update` suffix). This mismatch would cause ACP clients to ignore config option updates because they do not recognize the discriminator value.
-**ACP Requirement**: KB-01 line 214 defines the update type as `config_option`. KB-09 line 923 confirms `"config_option"` is the wire value.
-**Suggested Fix**: Change `'config_options_update'` to `'config_option'` on line 272.
+**File**: `src/types/session.ts`
+**Lines**: 48-60
+**Description**: The `MCPServerConfig` type uses a discriminated union with `type: 'stdio'` for stdio servers. However, the SDK's `McpServer` union type defines stdio as `McpServerStdio` WITHOUT a `type` discriminator — only HTTP and SSE variants have `type` fields. Additionally, the SDK makes `args` and `env` required on `McpServerStdio`, while our type has them as optional. This means:
+- Our type requires `type: 'stdio'` which the SDK never sends
+- Our type allows omitting `args` and `env` which the SDK requires
 
----
+**Remediation**: Restructure `MCPServerConfig` to match the SDK union pattern: stdio servers should not require a `type` field, and `args`/`env` should be required (with `args: []` and `env: []` as defaults). Alternatively, keep the discriminated union for internal convenience but add a mapping layer.
 
-### Issue 3
-
+### 5. SessionConfigOption missing _meta field (KB-08, KB-09: Extensibility)
 **Severity**: Major
-**File**: `src/types/index.ts`
-**Line**: 30 (end of file)
-**KB Topic**: Module Completeness (KB-09 Schema Exports)
-**Description**: The barrel export file does not re-export `review-scoring.ts`. Any consumer importing from `@l0/index` will not have access to `REVIEW_DIMENSIONS`, `computeWeightedScore`, `ReviewDimensionConfig`, `IssueSeverity`, or `ReviewIssue`. This is the only type module in `src/types/` excluded from the barrel.
-**ACP Requirement**: The barrel file's own documentation (lines 5-6) states it "Re-exports all L0 type definitions." Omitting `review-scoring` violates its own contract.
-**Suggested Fix**: Add `export * from './review-scoring';` to `src/types/index.ts`.
+**File**: `src/types/config.ts`
+**Lines**: 103-123
+**Description**: The SDK's `SessionConfigOption` type includes an optional `_meta?: { [key: string]: unknown } | null` field for ACP extensibility. Our `SessionConfigOption` type omits this field entirely. While `SessionConfigOptionChoice` correctly includes `_meta`, the parent `SessionConfigOption` does not. This means extensibility metadata cannot be attached to config options sent over the wire.
 
----
+**Remediation**: Add `_meta?: Record<string, unknown>` to the `SessionConfigOption` type.
 
-### Issue 4
-
+### 6. SessionConfigOption.options doesn't support grouped options (KB-09: Config Options)
 **Severity**: Minor
-**File**: `src/types/constants.ts`
-**Line**: 39
-**KB Topic**: Protocol Version Format (KB-01 line 3, KB-09 lines 602-606)
-**Description**: `ACP_PROTOCOL_VERSION` is defined as the integer `1`, which matches KB-01's statement that "Protocol Version: 1 (MAJOR, integer only)." However, the ACP SDK's `PROTOCOL_VERSION` constant is the string `"0.15"` (KB-09 line 605). The codebase uses `ACP_PROTOCOL_VERSION` (integer 1) in places where the SDK expects a string. This dual representation could cause wire-format mismatches if the integer constant is used directly in `initialize` responses instead of the SDK's string constant.
-**ACP Requirement**: KB-09 line 605: `PROTOCOL_VERSION` current value is `"0.15"`. The SDK `InitializeResponse` expects `protocolVersion: string` (KB-09 line 300).
-**Suggested Fix**: Either (a) change `ACP_PROTOCOL_VERSION` to the string `'0.15'` to match the SDK wire format, or (b) add a separate `ACP_SDK_PROTOCOL_VERSION = '0.15'` constant and document that the integer constant is the spec-level version while the string constant is the SDK wire version.
+**File**: `src/types/config.ts`
+**Lines**: 119-120
+**Description**: The SDK defines `SessionConfigSelectOptions = Array<SessionConfigSelectOption> | Array<SessionConfigSelectGroup>`, supporting both flat and grouped option lists. Our `SessionConfigOptionChoice[]` type only supports flat options. This means config options that need visual grouping (e.g., grouping models by provider) cannot be represented.
 
----
+**Remediation**: Define a `SessionConfigOptionGroup` type and update `options` to accept either flat or grouped arrays, matching the SDK's `SessionConfigSelectOptions` union.
 
-### Issue 5
-
+### 7. ToolKind/ToolCallKind missing 'switch_mode' (KB-09: Tool Calls)
 **Severity**: Minor
-**File**: `src/types/review-scoring.ts`
-**Line**: 62
-**KB Topic**: L0 Layer Purity (module header, line 3)
-**Description**: The module header declares `@layer L0 -- pure types, no runtime code, no imports` but `computeWeightedScore` on line 62 is a runtime function, not a pure type. While the function is side-effect free, it violates the L0 contract that the module itself declares. The `REVIEW_DIMENSIONS` array constant on line 39 is borderline (it emits runtime code but has zero side effects, similar to the enum exception documented in `constants.ts`).
-**ACP Requirement**: The project's own L0 contract states "pure types, no runtime code." Constants are explicitly exempted per `constants.ts` line 7-9, but executable functions are not.
-**Suggested Fix**: Move `computeWeightedScore` to an L1 or L2 utility module. Keep the types and the `REVIEW_DIMENSIONS` constant in L0.
+**File**: `src/types/events.ts` (or wherever ToolCallKind is referenced)
+**Lines**: N/A (type not defined in src/types/ but used in extensions)
+**Description**: The SDK defines `ToolKind = "read" | "edit" | "delete" | "move" | "search" | "execute" | "think" | "fetch" | "switch_mode" | "other"`. KB-06 line 103-112 lists ToolCallKind without `switch_mode`. If the runtime defines its own ToolCallKind type or enum, it should include `switch_mode` per the SDK.
 
----
+**Remediation**: Ensure any `ToolCallKind` or `ToolKind` type defined in the codebase includes `'switch_mode'`.
 
-### Issue 6
-
-**Severity**: Minor
-**File**: `src/types/events.ts`
-**Line**: 263
-**KB Topic**: Session Update Discriminator (KB-01 lines 202-215, KB-09 lines 119-135)
-**Description**: The `AcpSessionUpdateType` union is named to suggest it represents wire-protocol values, but the code comment on line 261 says it uses the `sessionUpdate` discriminator field. Meanwhile, the KB-01 overview (line 202) describes the updates using a `type` field (`update.type`), while KB-09 (lines 119-135) shows `sessionUpdate` as the discriminator. This naming inconsistency in the KB itself is correctly resolved in the codebase (using `sessionUpdate`), but the `AcpSessionUpdateType` union is missing `'session_info'` which is listed in KB-01 line 211.
-**ACP Requirement**: KB-01 line 211 lists `session_info` as a valid session update type.
-**Suggested Fix**: Add `'session_info'` to the `AcpSessionUpdateType` union if it is not already present. (Verified: it is not in the union on lines 263-273.)
-
----
-
-### Issue 7
-
+### 8. EnvVariable and HttpHeader missing _meta field (KB-08, KB-09: Extensibility)
 **Severity**: Nitpick
-**File**: `src/types/transport.ts`
-**Line**: 137
-**KB Topic**: Transport Type Definitions (KB-01 lines 37-63)
-**Description**: The `Message` type alias on line 137 is identical to `AnyMessage` on line 18 (`RequestMessage | ResponseMessage | NotificationMessage`). Having two names for the same type creates ambiguity about which to use. The ACP SDK uses `AnyMessage` (KB-01 line 48), making `Message` a redundant alias.
-**ACP Requirement**: The ACP SDK defines `AnyMessage` as the canonical type name (KB-01 line 48, KB-09 line 524).
-**Suggested Fix**: Remove the `Message` type alias on line 137 or deprecate it in favor of `AnyMessage`. Ensure all internal consumers use `AnyMessage`.
+**File**: `src/types/session.ts`
+**Lines**: 33, 39
+**Description**: The SDK's `EnvVariable` type includes an optional `_meta` field. Our `EnvVariable = { name: string; value: string }` omits it. Similarly, `HttpHeader` omits `_meta`. While unlikely to cause practical issues, it means metadata cannot roundtrip through these types.
 
----
-
-## Summary
-
-The types and transport layer demonstrate solid ACP compliance overall. The `Stream`, `AnyMessage`, and JSON-RPC message types correctly model the ACP wire protocol. The transport factory correctly uses `acp.ndJsonStream` with the proper argument order (output, input). The `_meta` extensibility field is properly modeled in `Event<T>` with the correct W3C Trace Context reserved keys.
-
-The three major issues (config option boolean support, incorrect session update discriminator value, missing barrel export) should be fixed before merge as they would cause wire-protocol incompatibilities or missing functionality. The protocol version ambiguity and L0 layer violation are lower priority but should be addressed in a follow-up.
+**Remediation**: Add `_meta?: Record<string, unknown>` to both `EnvVariable` and `HttpHeader` types.

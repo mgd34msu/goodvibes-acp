@@ -1,153 +1,123 @@
-# ACP Compliance Review: MCP Bridge
+# Wave 1 Review — Agent 6: MCP Bridge
 
-**Reviewer**: goodvibes:reviewer (Iteration 3)  
-**Scope**: `src/extensions/mcp/` (bridge.ts, index.ts, tool-call-bridge.ts, tool-proxy.ts, transport.ts)  
-**KB References**: `06-tools-mcp.md`, `01-overview.md`  
-**ACP Spec**: https://agentclientprotocol.com/llms-full.txt (fetched)  
-**Score: 6.8/10** | **Issues: 2 critical, 3 major, 4 minor**
-
----
-
-## Reality Check Results
-
-| Check | Status | Notes |
-|-------|--------|-------|
-| Files exist | PASS | All 5 source files present |
-| Exports used | PASS | All exports re-exported via index.ts barrel |
-| Import chain valid | PASS | index.ts is the barrel; bridge/proxy/transport are cross-referenced |
-| No placeholders | WARN | ISS-024 TODO for permission gate (tool-call-bridge.ts:101-108) |
-| Integration verified | PASS | McpToolCallBridge, McpToolProxy, McpBridge all connected |
+**Scope**: `src/extensions/mcp/bridge.ts`, `src/extensions/mcp/transport.ts`, `src/extensions/mcp/tool-call-bridge.ts`, `src/extensions/mcp/index.ts`  
+**KB References**: `06-tools-mcp.md`, `04-prompt-turn.md`, `09-sdk-types.md`  
+**Reviewer**: ACP Compliance Agent 6  
+**Date**: 2026-03-08
 
 ---
 
-## Critical Issues
+## Issues
 
-| # | File | Line | KB Topic | Issue |
-|---|------|------|----------|-------|
-| 1 | `src/extensions/mcp/tool-call-bridge.ts` | 130 | 06-tools-mcp.md L525-540 | Empty content block forwarded on completed tool calls |
-| 2 | `src/extensions/mcp/tool-call-bridge.ts` | 109 | 06-tools-mcp.md L114 | Uses `'in_progress'` status instead of ACP spec `'running'` |
+### Issue 1 — stderr pipe pollutes ACP ndjson transport
+**File**: `src/extensions/mcp/transport.ts:267`  
+**KB Topic**: 06-tools-mcp.md (MCP Transport), ACP ndjson transport protocol  
+**Severity**: Critical  
 
-### 1. Empty content block on tool completion (Critical)
-
-**File**: `src/extensions/mcp/tool-call-bridge.ts:130`  
-**KB Reference**: 06-tools-mcp.md lines 525-540 ("MCP ContentBlock[] is directly compatible with ACP — forward directly, no transform needed")
-
-The completed tool_call_update emits a hardcoded empty content block:
-```typescript
-[{ type: 'content', content: { type: 'text', text: '' } }]
-```
-
-Per KB 06 line 532, the actual MCP result content should be forwarded directly to the ACP client. The current implementation discards all tool output, meaning the ACP client never sees what the tool returned. This breaks the tool call visibility contract — clients cannot display tool results.
-
-**Fix**: Pass the actual MCP tool result content blocks from the `tool_complete` progress event into the `emitToolCallUpdate` call.
-
-### 2. Wrong status enum value for running state (Critical)
-
-**File**: `src/extensions/mcp/tool-call-bridge.ts:109`  
-**KB Reference**: 06-tools-mcp.md line 114 (`type ToolCallStatus = 'pending' | 'running' | 'completed' | 'failed'`)
-
-The code uses `'in_progress'` as the active execution status. The ACP wire protocol defines `'running'` (KB 06 line 114, line 17). The ISS-055 comment at lines 44-51 acknowledges the SDK uses `'in_progress'`, but the wire-level spec is authoritative for interoperability — a non-SDK ACP client receiving `'in_progress'` would not recognize it as a valid status.
-
-**Fix**: Use `'running'` as the status value, or verify the SDK version actually sends `'running'` over the wire regardless of the TypeScript type name.
+`child.stderr?.pipe(process.stderr)` forwards MCP server stderr directly to the agent's stderr stream. When the ACP agent itself uses stdin/stdout for ndjson transport, stderr may be shared or redirected by the parent process. MCP servers can emit noisy debug output on stderr which will intermingle with agent diagnostic output. While stderr is not the ACP transport channel (stdin/stdout is), certain client implementations may capture stderr for error display, causing MCP server noise to surface as agent errors. The pipe should be consumed and routed through the EventBus or a structured logger, not directly piped to `process.stderr`.
 
 ---
 
-## Major Issues
+### Issue 2 — Missing `mcpCapabilities` declaration in agent initialize response
+**File**: `src/extensions/mcp/bridge.ts:224-236` (noted as limitation)  
+**KB Topic**: 06-tools-mcp.md lines 422-450 — Agent declares MCP transport support in `agentCapabilities.mcp`  
+**Severity**: Critical  
 
-| # | File | Line | KB Topic | Issue |
-|---|------|------|----------|-------|
-| 3 | `src/extensions/mcp/tool-call-bridge.ts` | 91-113 | 06-tools-mcp.md L14-19 | Fire-and-forget tool_call lifecycle breaks on partial failure |
-| 4 | `src/extensions/mcp/tool-proxy.ts` | 128-136 | 06-tools-mcp.md L411 | Tool name parse/unparse asymmetry with double-underscore server names |
-| 5 | `src/extensions/mcp/transport.ts` | 207 | 01-overview.md L39 | No write error handling on stdin — pending requests hang until timeout |
-
-### 3. Fire-and-forget tool_call lifecycle (Major)
-
-**File**: `src/extensions/mcp/tool-call-bridge.ts:91-113`  
-**KB Reference**: 06-tools-mcp.md lines 14-19 (lifecycle: pending -> running -> completed|failed)
-
-The `emitToolCall` and `emitToolCallUpdate` calls are chained with `.then()` and a shared `.catch()`. If the initial `emitToolCall` (pending) fails, the `.then()` block still attempts to emit `'in_progress'`, potentially creating an orphaned update for a tool_call that was never announced. The ACP lifecycle requires `tool_call` (create) before `tool_call_update` — violating this order could confuse clients.
-
-**Fix**: Await both calls sequentially, and skip the `tool_call_update` if `emitToolCall` fails. Consider using `async/await` inside the handler with proper error boundaries.
-
-### 4. Tool name parse/unparse asymmetry (Major)
-
-**File**: `src/extensions/mcp/tool-proxy.ts:128-136`  
-**KB Reference**: 06-tools-mcp.md line 411 (name field used for tool namespacing)
-
-`_parseToolName` splits on the first `__` occurrence. Bridge.ts:247 constructs names as `${serverId}__${tool.name}`. If `serverId` (from `server.name`) or `tool.name` contains `__`, the parse is incorrect. For example, server name `my__server` with tool `read` produces `my__server__read`, which parses as serverId=`my`, rawToolName=`server__read` — routing to the wrong server.
-
-**Fix**: Use a separator that cannot appear in MCP server or tool names, or document the constraint that server names must not contain `__`.
-
-### 5. No write error handling on stdin (Major)
-
-**File**: `src/extensions/mcp/transport.ts:207`  
-**KB Reference**: 01-overview.md line 39 (ndjson over stdio transport)
-
-`stdin.write()` does not handle the write callback or error event. If the subprocess stdin pipe is broken (process crashed between check and write), the pending promise will hang until the 30-second timeout. This creates unnecessary latency for failure detection.
-
-**Fix**: Pass an error callback to `stdin.write()` and reject the pending promise immediately on write failure.
+Per KB: the agent MUST declare `agentCapabilities.mcp: { http: boolean, sse: boolean }` during `initialize` so the client knows which MCP transports are supported. The SDK confirms `McpCapabilities = { http?: boolean; sse?: boolean }` exists on `AgentCapabilities.mcpCapabilities`. The code only has a comment acknowledging this gap (lines 231-236) but never actually declares it. Without this, clients cannot know that HTTP/SSE servers will be silently ignored.
 
 ---
 
-## Minor Issues
-
-| # | File | Line | KB Topic | Issue |
-|---|------|------|----------|-------|
-| 6 | `src/extensions/mcp/transport.ts` | 99 | 01-overview.md L39 | Empty catch block silently swallows JSON parse errors |
-| 7 | `src/extensions/mcp/transport.ts` | 265 | 01-overview.md L39-44 | MCP server stderr piped to agent stderr may pollute ndjson |
-| 8 | `src/extensions/mcp/bridge.ts` | 223-241 | 06-tools-mcp.md L422-450 | HTTP/SSE capability not declared in agent initialize |
-| 9 | `src/extensions/mcp/tool-call-bridge.ts` | 101-108 | 06-tools-mcp.md L497-514 | Permission gate is a TODO placeholder (ISS-024) |
-
-### 6. Silent JSON parse error swallowing (Minor)
-
-**File**: `src/extensions/mcp/transport.ts:99`
-
-The `catch {}` block silently ignores all parse failures on stdout lines. While non-JSON lines from MCP servers are unusual, repeated parse failures could indicate a misconfigured server or protocol mismatch. At minimum, a debug-level log would aid troubleshooting.
-
-### 7. MCP stderr pipe may pollute agent output (Minor)
-
-**File**: `src/extensions/mcp/transport.ts:265`
-
-`child.stderr?.pipe(process.stderr)` forwards MCP server diagnostic output to the agent's stderr. If any downstream component parses agent stderr (e.g., for structured logging or ndjson), MCP server noise could cause parse errors.
-
-### 8. Missing MCP capability declaration (Minor)
-
-**File**: `src/extensions/mcp/bridge.ts:223-241`  
-**KB Reference**: 06-tools-mcp.md lines 422-450
-
-The comment at lines 231-236 acknowledges that `mcp: { http: false, sse: false }` should be declared in `agentCapabilities` during `initialize`, but this is not implemented. Per KB 06, the client uses this to know which MCP transports the agent supports. Without it, clients may send HTTP/SSE server configs that will be silently dropped.
-
-### 9. Permission gate placeholder (Minor)
-
+### Issue 3 — Permission gate is a TODO placeholder
 **File**: `src/extensions/mcp/tool-call-bridge.ts:101-108`  
-**KB Reference**: 06-tools-mcp.md lines 497-514 (permission gate between pending and running)
+**KB Topic**: 06-tools-mcp.md lines 497-515 — Permission gate between pending and running  
+**Severity**: Major  
 
-The TODO at ISS-024 describes the permission gate flow but it is not implemented. The KB spec (06, lines 180-196) shows that destructive operations (file writes, shell commands) should request permission between pending and running states. Currently all tools transition directly from pending to in_progress without any permission check.
-
----
-
-## Category Breakdown
-
-| Category | Score | Key Issues |
-|----------|-------|------------|
-| Security | 7/10 | Missing permission gate (ISS-024) |
-| Error Handling | 5/10 | Fire-and-forget lifecycle, silent catch, no write error handling |
-| Testing | N/A | No test files in scope |
-| Organization | 9/10 | Clean separation: bridge, proxy, transport, tool-call-bridge |
-| Performance | 8/10 | Parallel connections, proper timeouts |
-| SOLID/DRY | 8/10 | Good SRP, IToolProvider interface properly implemented |
-| Naming | 9/10 | Clear naming, consistent conventions |
-| Maintainability | 7/10 | Good docs/comments, but fire-and-forget patterns add complexity |
-| Documentation | 9/10 | Thorough JSDoc, module headers, limitation annotations |
-| Dependencies | 8/10 | Minimal deps, no @modelcontextprotocol/sdk needed |
+The KB reference implementation shows a mandatory permission gate pattern: after announcing `pending`, the agent should call `requestPermission()` for tools that require it (file writes, shell commands). The code has only a TODO comment referencing ISS-024/ISS-018. Without this gate, all MCP tool calls bypass user approval, which is a protocol compliance gap for tools with side effects.
 
 ---
 
-## Recommendations
+### Issue 4 — Empty content blocks forwarded on tool completion
+**File**: `src/extensions/mcp/tool-call-bridge.ts:131-133`  
+**KB Topic**: 06-tools-mcp.md line 532 — `content: mcpResult.content` should forward MCP content directly  
+**Severity**: Major  
 
-1. **Immediate**: Fix empty content forwarding on completed tool calls (Issue 1) — this breaks ACP tool visibility
-2. **Immediate**: Resolve `'in_progress'` vs `'running'` status discrepancy (Issue 2) — interoperability risk
-3. **This PR**: Convert fire-and-forget `.then()` chains to proper async/await with error boundaries (Issue 3)
-4. **This PR**: Add write error callback in transport.ts:207 (Issue 5)
-5. **Follow-up**: Implement permission gate (ISS-024) for destructive tool operations
-6. **Follow-up**: Declare `mcp: { http: false, sse: false }` in agent capabilities
+When `event.result` is non-null but `event.result.data` is `undefined`, the code produces `JSON.stringify('')` which yields `""` — a content block with an empty string. The KB states MCP `ContentBlock[]` should be forwarded directly to ACP without transformation. Instead, the bridge manually wraps data into `{ type: 'content', content: { type: 'text', text: ... } }`, losing any non-text content blocks (images, resources) from MCP tool results. Additionally, when `event.result` is null, an empty array `[]` is sent, which may cause issues if clients expect at least one content block on `completed` status.
+
+---
+
+### Issue 5 — MCP content blocks not forwarded directly to ACP
+**File**: `src/extensions/mcp/tool-call-bridge.ts:131-133`, `src/extensions/mcp/tool-proxy.ts:94-111`  
+**KB Topic**: 06-tools-mcp.md lines 525-532, 540 — "MCP ContentBlock[] is directly compatible with ACP"  
+**Severity**: Major  
+
+The KB explicitly states: "ACP uses the same ContentBlock schema as MCP. MCP tool output can be forwarded to ACP content without transformation." However, `McpToolProxy.execute()` wraps the entire MCP `McpCallResult` into a `ToolResult<T>` envelope, and `McpToolCallBridge` then extracts `.data` and re-wraps it as a text string. The original MCP `content[]` array (which may contain `image`, `resource`, or `embedded_resource` blocks) is lost in this double-wrapping. The bridge should forward `mcpResult.content` directly as ACP `ToolCallContent[]`.
+
+---
+
+### Issue 6 — JSON parse errors silently consumed with only debug logging
+**File**: `src/extensions/mcp/transport.ts:99-103`  
+**KB Topic**: 06-tools-mcp.md — MCP protocol reliability  
+**Severity**: Minor  
+
+Non-JSON lines from MCP server stdout are caught and logged at `console.debug` level only. While the comment notes this is intentional (ISS-075), persistent parse failures could indicate a malfunctioning MCP server. The transport should count consecutive parse failures and emit an `mcp:error` event after a threshold, so the session layer can notify the client.
+
+---
+
+### Issue 7 — No MCP notification handling (notifications from server are dropped)
+**File**: `src/extensions/mcp/transport.ts:83-104`  
+**KB Topic**: 06-tools-mcp.md lines 456-468 — MCP capabilities negotiation  
+**Severity**: Minor  
+
+The `McpClient` line handler only processes messages with a numeric `id` (responses). MCP servers can send JSON-RPC notifications (no `id` field) such as `notifications/tools/list_changed` when tools are dynamically added/removed. These are silently ignored. While not strictly required for basic operation, dropping `list_changed` notifications means the agent's tool list can become stale without any indication.
+
+---
+
+### Issue 8 — `_request` timeout does not clean up pending entry on stdin write failure
+**File**: `src/extensions/mcp/transport.ts:204-210`  
+**KB Topic**: MCP protocol robustness  
+**Severity**: Minor  
+
+If `this._process.stdin.write()` throws or the write callback errors, the pending entry at line 200 remains in the `_pending` map with its timeout still active. The timeout will eventually fire and reject, but the entry leaks until then. The write error path at line 206 calls `reject()` but doesn't delete from `_pending` or clear the timeout, leading to a double-reject (once from the early return, once from the timeout).
+
+---
+
+### Issue 9 — `disconnect()` does not await subprocess exit
+**File**: `src/extensions/mcp/bridge.ts:91-97`  
+**KB Topic**: 06-tools-mcp.md — MCP server lifecycle  
+**Severity**: Minor  
+
+`disconnect()` calls `conn.client.close()` which calls `this._process.kill()`, but the method is `async` and returns immediately without waiting for the process to actually exit. During `disconnectAll()` at session teardown, this means MCP server processes may still be running when the agent reports session shutdown complete. Should await the process exit event or at minimum fire-and-forget with a timeout guard.
+
+---
+
+### Issue 10 — `tool-proxy.ts` `_parseToolName` only splits on first `__` separator
+**File**: `src/extensions/mcp/tool-proxy.ts:128-136`  
+**KB Topic**: 06-tools-mcp.md — Tool namespacing  
+**Severity**: Nitpick  
+
+The parser splits on the first `__` occurrence, so `filesystem__read_file` yields `serverId=filesystem`, `rawToolName=read_file`. This works correctly. However, if a server ID itself contains `__` (unlikely but possible), the split would be incorrect. The `bridge.ts` `_adaptTools` method at line 247 uses the same `__` separator for namespacing. This is consistent but fragile — a validation check during tool registration that server names don't contain `__` would prevent subtle routing bugs.
+
+---
+
+## Summary
+
+| # | Severity | File | Issue |
+|---|----------|------|-------|
+| 1 | Critical | transport.ts:267 | stderr pipe pollutes agent output |
+| 2 | Critical | bridge.ts:224-236 | Missing mcpCapabilities declaration |
+| 3 | Major | tool-call-bridge.ts:101-108 | Permission gate is TODO |
+| 4 | Major | tool-call-bridge.ts:131-133 | Empty/lossy content blocks on completion |
+| 5 | Major | tool-call-bridge.ts + tool-proxy.ts | MCP content not forwarded directly |
+| 6 | Minor | transport.ts:99-103 | JSON parse errors only debug-logged |
+| 7 | Minor | transport.ts:83-104 | MCP server notifications dropped |
+| 8 | Minor | transport.ts:204-210 | Pending entry leak on stdin write failure |
+| 9 | Minor | bridge.ts:91-97 | disconnect() doesn't await process exit |
+| 10 | Nitpick | tool-proxy.ts:128-136 | No validation of `__` in server names |
+
+**Critical**: 2 | **Major**: 3 | **Minor**: 4 | **Nitpick**: 1
+
+---
+
+## Overall Score: 5.5 / 10
+
+**Rationale**: The MCP bridge architecture is well-structured with clean separation (bridge orchestrator, transport client, tool proxy, ACP visibility bridge). Code quality is solid with good documentation and error handling patterns. However, two critical protocol compliance gaps (missing `mcpCapabilities` declaration, stderr pipe pollution) and three major issues (no permission gate, lossy content forwarding, empty content blocks) significantly reduce ACP compliance. The implementation works for the happy path of stdio-only MCP servers with text-only tool output, but deviates from the ACP protocol specification for content forwarding, capability declaration, and permission gating.
