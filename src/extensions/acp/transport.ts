@@ -15,6 +15,9 @@ import type { Socket } from 'node:net';
 import * as acp from '@agentclientprotocol/sdk';
 import type { TransportType } from '../../types/transport.js';
 
+// Default protocol version injected when the client omits it (e.g. Zed editor)
+const DEFAULT_PROTOCOL_VERSION = 1;
+
 // ---------------------------------------------------------------------------
 // Transport options
 // ---------------------------------------------------------------------------
@@ -131,15 +134,100 @@ export function createStdioTransport(): AcpStream {
 export function createTcpTransportFromSocket(socket: Socket): AcpStream {
   return acp.ndJsonStream(
     Writable.toWeb(socket) as unknown as WritableStream<Uint8Array>,
-    Readable.toWeb(socket) as unknown as ReadableStream<Uint8Array>,
+    patchIncomingStream(Readable.toWeb(socket) as unknown as ReadableStream<Uint8Array>),
   );
 }
 
 function _createStdioTransport(): AcpStream {
   return acp.ndJsonStream(
     Writable.toWeb(process.stdout) as unknown as WritableStream<Uint8Array>,
-    Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>,
+    patchIncomingStream(Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>),
   );
+}
+
+// ---------------------------------------------------------------------------
+// patchIncomingStream
+// ---------------------------------------------------------------------------
+
+/**
+ * Wraps an incoming ndjson byte stream and patches `initialize` requests that
+ * are missing `protocolVersion`. Zed (and other editors) may omit this field,
+ * causing the ACP SDK's Zod validation to reject the request before our own
+ * handler can apply a default.
+ *
+ * The transform:
+ * 1. Buffers incoming bytes, splitting on newline (`\n`) boundaries.
+ * 2. For each complete line, attempts JSON.parse.
+ * 3. If it is a JSON-RPC request with `method: "initialize"` and
+ *    `params.protocolVersion` is undefined/missing, injects `protocolVersion: 1`.
+ * 4. Re-serialises the (possibly modified) object and emits as UTF-8 bytes
+ *    followed by a `\n`.
+ * 5. Non-JSON lines and all other messages are passed through unchanged.
+ *
+ * @param input - The raw ReadableStream of ndjson bytes from stdin or socket
+ * @returns A patched ReadableStream that can be passed to `acp.ndJsonStream()`
+ */
+export function patchIncomingStream(
+  input: ReadableStream<Uint8Array>,
+): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  return input.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        buffer += decoder.decode(chunk, { stream: true });
+        const lines = buffer.split('\n');
+        // Last element is an incomplete line (no trailing \n yet) — keep buffered
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          controller.enqueue(encoder.encode(patchLine(line) + '\n'));
+        }
+      },
+      flush(controller) {
+        // Emit any remaining buffered content (stream closed mid-line)
+        if (buffer.length > 0) {
+          controller.enqueue(encoder.encode(patchLine(buffer) + '\n'));
+          buffer = '';
+        }
+      },
+    }),
+  );
+}
+
+/**
+ * Patch a single ndjson line: inject `protocolVersion` on `initialize` requests
+ * that are missing it. Returns the line unchanged if parsing fails or it is not
+ * an `initialize` request.
+ */
+function patchLine(line: string): string {
+  const trimmed = line.trim();
+  if (trimmed.length === 0) return line;
+  let msg: unknown;
+  try {
+    msg = JSON.parse(trimmed);
+  } catch {
+    // Not valid JSON — pass through as-is
+    return line;
+  }
+  if (
+    msg !== null &&
+    typeof msg === 'object' &&
+    'method' in msg &&
+    (msg as Record<string, unknown>)['method'] === 'initialize' &&
+    'params' in msg
+  ) {
+    const params = (msg as Record<string, unknown>)['params'];
+    if (params !== null && typeof params === 'object') {
+      const p = params as Record<string, unknown>;
+      if (p['protocolVersion'] === undefined) {
+        p['protocolVersion'] = DEFAULT_PROTOCOL_VERSION;
+        return JSON.stringify(msg);
+      }
+    }
+  }
+  return line;
 }
 
 // ---------------------------------------------------------------------------

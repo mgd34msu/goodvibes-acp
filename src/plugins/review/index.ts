@@ -17,6 +17,17 @@ export { CodeFixer } from './fixer.js';
 export { REVIEW_DIMENSIONS, computeWeightedScore } from './scoring.js';
 export type { ReviewDimensionConfig, ReviewIssue, IssueSeverity } from './scoring.js';
 
+export { ReviewToolProvider } from './review-tool-provider.js';
+export { calculateScore, scoreBreakdown } from './scoring-engine.js';
+export { buildReviewerPrompt } from './reviewer-prompt.js';
+export { DEFAULT_SCORING_CONFIG } from './types.js';
+export type {
+  ReviewIssue as LLMReviewIssue,
+  SubmitReviewInput,
+  ReviewReference,
+  ScoringConfig,
+} from './types.js';
+
 /** Review plugin registration object */
 export const ReviewPlugin: PluginRegistration = {
   manifest: {

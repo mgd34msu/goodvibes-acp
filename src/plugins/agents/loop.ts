@@ -47,6 +47,8 @@ export interface AgentLoopConfig {
   cwd?: string;
   /** Workspace root paths for context enrichment */
   workspaceRoots?: string[];
+  /** Called whenever the agent successfully reads a file (for reference tracking) */
+  onFileRead?: (path: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +92,12 @@ export interface AgentLoopResult {
   stopReason: InternalStopReason;
   /** Error message if stopReason is 'error' */
   error?: string;
+  /**
+   * Files modified during the loop execution.
+   * Populated by intercepting file-writing tool calls (precision_write, precision_edit,
+   * and any tool with 'write' or 'edit' in the name that carries a path/files input).
+   */
+  filesModified: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -97,6 +105,9 @@ export interface AgentLoopResult {
 // ---------------------------------------------------------------------------
 
 export class AgentLoop {
+  /** Tracks unique file paths written or edited during this loop run */
+  private readonly _filesModified = new Set<string>();
+
   constructor(private readonly config: AgentLoopConfig) {}
 
   async run(task: string): Promise<AgentLoopResult> {
@@ -121,7 +132,7 @@ export class AgentLoop {
     while (turns < this.config.maxTurns) {
       // Check cancellation before each turn
       if (this.config.signal?.aborted) {
-        return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'cancelled' };
+        return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'cancelled', filesModified: Array.from(this._filesModified) };
       }
 
       turns++;
@@ -148,14 +159,16 @@ export class AgentLoop {
         response = await this.config.provider.chat(params);
       } catch (err) {
         if (this.config.signal?.aborted) {
-          return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'cancelled' };
+          return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'cancelled', filesModified: Array.from(this._filesModified) };
         }
+        console.error('[AgentLoop] LLM call failed:', String(err));
         return {
           output: lastTextOutput,
           turns,
           usage: totalUsage,
           stopReason: 'error',
           error: String(err),
+          filesModified: Array.from(this._filesModified),
         };
       }
 
@@ -181,26 +194,26 @@ export class AgentLoop {
 
       // end_turn — agent completed normally
       if (response.stopReason === 'end_turn') {
-        return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'end_turn' };
+        return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'end_turn', filesModified: Array.from(this._filesModified) };
       }
 
       // max_tokens — response was truncated; propagate as distinct stop reason (KB-04)
       if (response.stopReason === 'max_tokens') {
-        return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'max_tokens' };
+        return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'max_tokens', filesModified: Array.from(this._filesModified) };
       }
 
       // tool_use — execute tools and feed results back
       if (response.stopReason === 'tool_use') {
         const toolResults = await this._executeToolCalls(response.content, turns);
-        messages.push({ role: 'user', content: toolResults });
+        messages.push({ role: 'tool', content: toolResults });
         continue;
       }
 
       // Unknown stop reason — treat as end_turn
-      return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'end_turn' };
+      return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'end_turn', filesModified: Array.from(this._filesModified) };
     }
 
-    return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'max_turn_requests' };
+    return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'max_turn_requests', filesModified: Array.from(this._filesModified) };
   }
 
   // ---------------------------------------------------------------------------
@@ -270,6 +283,22 @@ export class AgentLoop {
         const durationMs = Date.now() - startTime;
         this.config.onProgress?.({ type: 'tool_complete', turn, toolName: block.name, durationMs, result: { data: result.data } });
 
+        // Track file reads for reference validation (reviewer agents)
+        if (this.config.onFileRead && (block.name === 'precision__precision_read' || block.name.endsWith('__precision_read'))) {
+          const inp = block.input as Record<string, unknown>;
+          const files = inp['files'];
+          if (Array.isArray(files)) {
+            for (const f of files) {
+              if (typeof f === 'object' && f !== null && typeof (f as Record<string, unknown>)['path'] === 'string') {
+                this.config.onFileRead((f as Record<string, unknown>)['path'] as string);
+              }
+            }
+          }
+        }
+
+        // Track file modifications for write/edit tool calls
+        this._trackFileModifications(block.name, block.input);
+
         results.push({
           type: 'tool_result',
           tool_use_id: block.id,
@@ -294,6 +323,76 @@ export class AgentLoop {
     }
 
     return results;
+  }
+
+  /**
+   * Inspect a successfully-executed tool call and record any file paths
+   * that were written or edited.
+   *
+   * Handles:
+   *   - precision__precision_write : input.files[].path
+   *   - precision__precision_edit  : input.edits[].path
+   *   - Any tool whose name contains 'write' or 'edit' with a top-level
+   *     `path` string or `files`/`edits` array carrying `.path` strings.
+   */
+  private _trackFileModifications(toolName: string, input: unknown): void {
+    if (typeof input !== 'object' || input === null) return;
+    const inp = input as Record<string, unknown>;
+    const name = toolName.toLowerCase();
+
+    // precision__precision_write — input.files[].path
+    if (toolName === 'precision__precision_write' || name.endsWith('__precision_write')) {
+      const files = inp['files'];
+      if (Array.isArray(files)) {
+        for (const f of files) {
+          if (typeof f === 'object' && f !== null && typeof (f as Record<string, unknown>)['path'] === 'string') {
+            this._filesModified.add((f as Record<string, unknown>)['path'] as string);
+          }
+        }
+      }
+      return;
+    }
+
+    // precision__precision_edit — input.edits[].path
+    if (toolName === 'precision__precision_edit' || name.endsWith('__precision_edit')) {
+      const edits = inp['edits'];
+      if (Array.isArray(edits)) {
+        for (const e of edits) {
+          if (typeof e === 'object' && e !== null) {
+            const ed = e as Record<string, unknown>;
+            const p = ed['path'] ?? ed['file'];
+            if (typeof p === 'string') this._filesModified.add(p);
+          }
+        }
+      }
+      return;
+    }
+
+    // Generic fallback: any tool whose lowercased name contains 'write' or 'edit'
+    if (name.includes('write') || name.includes('edit')) {
+      // Top-level path field
+      if (typeof inp['path'] === 'string') {
+        this._filesModified.add(inp['path']);
+      }
+      // files[].path array
+      if (Array.isArray(inp['files'])) {
+        for (const f of inp['files'] as unknown[]) {
+          if (typeof f === 'object' && f !== null && typeof (f as Record<string, unknown>)['path'] === 'string') {
+            this._filesModified.add((f as Record<string, unknown>)['path'] as string);
+          }
+        }
+      }
+      // edits[].path array
+      if (Array.isArray(inp['edits'])) {
+        for (const e of inp['edits'] as unknown[]) {
+          if (typeof e === 'object' && e !== null) {
+            const ed = e as Record<string, unknown>;
+            const p = ed['path'] ?? ed['file'];
+            if (typeof p === 'string') this._filesModified.add(p);
+          }
+        }
+      }
+    }
   }
 
   /**

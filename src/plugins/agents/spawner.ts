@@ -50,11 +50,8 @@ type AgentState = {
   errors: AgentError[];
   /**
    * Files modified by the agent loop.
-   * Populated from AgentLoopResult when the loop reports file modifications.
-   * Falls back to [] when the loop does not track file modifications.
-   * TODO ISS-038: Implement file modification tracking in AgentLoop to populate this.
-   * The loop must intercept write/edit/create tool calls and expose filesModified
-   * in AgentLoopResult. Until then, this field will always be [].
+   * Populated from AgentLoopResult after the loop completes.
+   * Empty array until the loop reports file modifications.
    */
   filesModified: string[] | undefined;
   startedAt?: number;
@@ -177,6 +174,7 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
             usage: { inputTokens: 0, outputTokens: 0 },
             stopReason: 'error',
             error: `Agent exceeded timeout of ${timeoutMs}ms`,
+            filesModified: [],
           });
         }
       }, timeoutMs);
@@ -196,12 +194,14 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
         (err: unknown) => {
           const s = this._agents.get(id);
           if (s && s.status === 'running') {
+            console.error(`[AgentSpawner] Agent ${s.config.type} (${id}) threw:`, String(err));
             this._settleFromLoop(id, {
               output: '',
               turns: 0,
               usage: { inputTokens: 0, outputTokens: 0 },
               stopReason: 'error',
               error: String(err),
+              filesModified: [],
             });
           }
         },
@@ -317,11 +317,13 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
 
     state.finishedAt = Date.now();
     state.output = loopResult.output;
+    state.filesModified = loopResult.filesModified;
 
     if (loopResult.stopReason === 'cancelled') {
       state.status = 'cancelled';
     } else if (loopResult.stopReason === 'error') {
       state.status = 'failed';
+      console.error(`[AgentSpawner] Agent ${state.config.type} (${id}) failed:`, loopResult.error ?? 'Unknown error');
       state.errors.push({
         code: 'AGENT_ERROR',
         message: loopResult.error ?? 'Unknown error',
@@ -391,8 +393,6 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
       handle: state.handle,
       status: state.status as AgentResult['status'],
       output: state.output,
-      // filesModified defaults to [] when the loop does not expose file modification data.
-      // TODO ISS-038: Remove fallback once AgentLoopResult.filesModified is implemented.
       filesModified: state.filesModified ?? [],
       errors: state.errors,
       durationMs: finishedAt - spawnedAt,

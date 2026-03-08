@@ -412,6 +412,11 @@ export class GoodVibesAgent implements Agent {
           ? `Task completed${score !== undefined ? ` (score: ${score.toFixed(1)})` : ''}.`
           : `Task ended with state: ${result.state}${score !== undefined ? ` (score: ${score.toFixed(1)})` : ''}.`;
 
+      // Log non-complete states to stderr for visibility
+      if (result.state !== 'complete') {
+        console.error(`[GoodVibesAgent] WRFC ended with state: ${result.state}`);
+      }
+
       // Stream result as agent message chunk
       await this.conn.sessionUpdate({
         sessionId,

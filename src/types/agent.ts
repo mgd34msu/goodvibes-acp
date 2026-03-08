@@ -23,7 +23,9 @@ export type AgentType =
   | 'tester'
   | 'architect'
   | 'integrator'
-  | 'deployer';
+  | 'deployer'
+  | 'skill-factory'
+  | 'agent-factory';
 
 // ---------------------------------------------------------------------------
 // Agent configuration

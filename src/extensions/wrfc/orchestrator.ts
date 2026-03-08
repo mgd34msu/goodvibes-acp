@@ -310,6 +310,7 @@ export class WRFCOrchestrator {
         this._context = machine.context();
         this.eventBus.emit('wrfc:cancelled', { workId, sessionId });
       } else {
+        console.error('[WRFCOrchestrator] Unhandled error:', String(err));
         // Any unhandled error drives the machine to failed
         if (!WRFC_TERMINAL_STATES.has(machine.current())) {
           machine.transition(WRFC_EVENTS.FAIL);

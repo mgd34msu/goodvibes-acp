@@ -30,7 +30,7 @@ import { IpcRouter } from './extensions/ipc/router.js';
 import { IpcSocketServer } from './extensions/ipc/socket.js';
 import type { AgentConfig, AgentHandle, AgentResult } from './types/agent.js';
 import type { ReviewResult, WorkResult, FixResult } from './types/registry.js';
-import type { IAgentSpawner, IReviewer, IFixer } from './types/registry.js';
+import type { IAgentSpawner, IToolProvider, ILLMProvider } from './types/registry.js';
 import { AgentTracker } from './extensions/agents/tracker.js';
 import { AgentCoordinator } from './extensions/agents/coordinator.js';
 import { DirectiveQueue } from './extensions/directives/queue.js';
@@ -48,6 +48,12 @@ import type { OnProgressFactory } from './plugins/agents/spawner.js';
 import { SkillsPlugin } from './plugins/skills/index.js';
 import { PrecisionPlugin } from './plugins/precision/index.js';
 import { AnalyticsPlugin } from './plugins/analytics/index.js';
+import { ReviewToolProvider } from './plugins/review/review-tool-provider.js';
+import { calculateScore } from './plugins/review/scoring-engine.js';
+import { buildReviewerPrompt } from './plugins/review/reviewer-prompt.js';
+import type { ReviewIssue } from './plugins/review/types.js';
+import { AgentLoop } from './plugins/agents/loop.js';
+import { AGENT_TYPE_CONFIGS } from './plugins/agents/types.js';
 import { ProjectPlugin } from './plugins/project/index.js';
 import { FrontendPlugin } from './plugins/frontend/index.js';
 import { EventRecorder } from './extensions/acp/event-recorder.js';
@@ -165,9 +171,15 @@ registry.unregister('agent-spawner');
 registry.register('agent-spawner', new AgentSpawnerPlugin(registry, onProgressFactory));
 SkillsPlugin.register(registry);
 PrecisionPlugin.register(registry);
+// Also expose precision as a tool-provider so agent spawner's getAll('tool-provider') finds it
+registry.registerMany('tool-provider', 'precision', registry.get<IToolProvider>('precision')!);
 AnalyticsPlugin.register(registry);
 ProjectPlugin.register(registry);
 FrontendPlugin.register(registry);
+
+// Create shared ReviewToolProvider — used by the LLM reviewer in the WRFC adapter
+const reviewToolProvider = new ReviewToolProvider();
+registry.registerMany('tool-provider', 'review', reviewToolProvider);
 
 const minReviewScore = config.get<number>('wrfc.minReviewScore') ?? 9.5;
 const maxAttempts = config.get<number>('wrfc.maxFixAttempts') ?? 3;
@@ -201,7 +213,7 @@ const serviceRegistry = new ServiceRegistry('.goodvibes', eventBus);
 
 const mcpBridge = new McpBridge(eventBus);
 const mcpToolProxy = new McpToolProxy(mcpBridge);
-registry.register('tool-provider', mcpToolProxy);
+registry.registerMany('tool-provider', 'mcp-proxy', mcpToolProxy);
 
 // ---------------------------------------------------------------------------
 // Daemon manager
@@ -293,31 +305,150 @@ const wrfcAdapter = {
         },
       },
 
-      // Real reviewer — delegates to the first registered L3 CodeReviewer.
+      // LLM reviewer — spawns a reviewer agent with the submit_review tool.
       reviewer: {
-        id: 'registry-reviewer',
-        capabilities: [],
+        id: 'llm-reviewer',
+        capabilities: ['typescript', 'general'],
         async review(workResult: WorkResult): Promise<ReviewResult> {
-          const reviewer = registry.get<IReviewer>('reviewer');
-          if (!reviewer) {
-            console.error('[goodvibes-acp] WRFC: No reviewer registered — returning score 10 fallback');
+          // Reset review tool state from any previous run
+          reviewToolProvider.reset();
+
+          const llmProvider = registry.getOptional<ILLMProvider>('llm-provider');
+          if (!llmProvider) {
+            console.error('[WRFC] No LLM provider — falling back to pass-through review');
             return {
               sessionId: workResult.sessionId,
               score: 10,
               dimensions: {},
               passed: true,
               issues: [],
-              notes: 'No reviewer configured',
+              notes: 'No LLM provider configured — skipping review',
             };
           }
-          return reviewer.review(workResult);
+
+          const reviewerConfig = AGENT_TYPE_CONFIGS['reviewer'];
+          const toolProviders = registry.getAll<IToolProvider>('tool-provider');
+
+          const reviewerPrompt = buildReviewerPrompt({
+            task: workResult.task,
+            filesModified: workResult.filesModified,
+            minScore: minReviewScore,
+          });
+
+          const loop = new AgentLoop({
+            provider: llmProvider,
+            tools: toolProviders,
+            model: reviewerConfig.defaultModel,
+            systemPrompt: reviewerPrompt,
+            maxTurns: reviewerConfig.maxTurns,
+            onFileRead: (path) => reviewToolProvider.trackFileRead(path),
+          });
+
+          await loop.run(
+            `Review the following files that were modified:\n${workResult.filesModified.map(f => '- ' + f).join('\n')}\n\nAgent output:\n${workResult.output}`,
+          );
+
+          const submittedReview = reviewToolProvider.consumeReview();
+
+          if (!submittedReview) {
+            console.error('[WRFC] Reviewer agent did not call submit_review — defaulting to pass');
+            return {
+              sessionId: workResult.sessionId,
+              score: 10,
+              dimensions: {},
+              passed: true,
+              issues: [],
+              notes: 'Reviewer did not submit structured review — defaulting to pass',
+            };
+          }
+
+          const score = calculateScore(submittedReview.issues);
+          const passed = score >= minReviewScore;
+
+          const issues = submittedReview.issues.map(i =>
+            `[${i.severity.toUpperCase()}] ${i.file}${i.line ? ':' + i.line : ''} \u2014 ${i.title}: ${i.description}`,
+          );
+
+          console.error(`[WRFC] Review complete: score=${score}, passed=${passed}, issues=${submittedReview.issues.length}`);
+
+          return Object.assign(
+            {
+              sessionId: workResult.sessionId,
+              score,
+              dimensions: {},
+              passed,
+              issues,
+              notes: submittedReview.summary,
+            } satisfies ReviewResult,
+            { _structuredIssues: submittedReview.issues },
+          );
         },
       },
 
-      // Real fixer — delegates to the L3 CodeFixer via registry.
+      // LLM fixer — spawns an engineer agent with structured issues as the task.
       fixer: {
         async fix(reviewResult: ReviewResult): Promise<FixResult> {
-          return registry.get<IFixer>('fixer')!.fix(reviewResult);
+          const structuredIssues = (reviewResult as ReviewResult & { _structuredIssues?: ReviewIssue[] })._structuredIssues;
+
+          if (!structuredIssues || structuredIssues.length === 0) {
+            return {
+              sessionId: reviewResult.sessionId,
+              success: true,
+              filesModified: [],
+              resolvedIssues: [],
+              remainingIssues: [],
+            };
+          }
+
+          const llmProvider = registry.getOptional<ILLMProvider>('llm-provider');
+          if (!llmProvider) {
+            return {
+              sessionId: reviewResult.sessionId,
+              success: false,
+              filesModified: [],
+              resolvedIssues: [],
+              remainingIssues: reviewResult.issues,
+            };
+          }
+
+          // Sort issues by severity so the engineer addresses critical issues first
+          const priorityOrder = ['critical', 'major', 'minor', 'nitpick'];
+          const sorted = [...structuredIssues].sort(
+            (a, b) => priorityOrder.indexOf(a.severity) - priorityOrder.indexOf(b.severity),
+          );
+
+          const fixTask = `Fix the following code review issues. Each issue includes the file, location, problem description, and fix guidance. Focus on implementing the fixes — do not re-review or re-discover.\n\n${sorted.map((issue, i) => {
+            let entry = `### Issue ${i + 1} [${issue.severity.toUpperCase()}]\n`;
+            entry += `**File**: ${issue.file}${issue.line ? ':' + issue.line : ''}\n`;
+            entry += `**Title**: ${issue.title}\n`;
+            entry += `**Description**: ${issue.description}\n`;
+            if (issue.references && issue.references.length > 0) {
+              entry += `**References**:\n${issue.references.map(r => `  - ${r.file}${r.line ? ':' + r.line : ''} \u2014 ${r.note}`).join('\n')}\n`;
+            }
+            return entry;
+          }).join('\n')}`;
+
+          const engineerConfig = AGENT_TYPE_CONFIGS['engineer'];
+          const toolProviders = registry.getAll<IToolProvider>('tool-provider');
+
+          const loop = new AgentLoop({
+            provider: llmProvider,
+            tools: toolProviders,
+            model: engineerConfig.defaultModel,
+            systemPrompt: engineerConfig.systemPromptPrefix,
+            maxTurns: engineerConfig.maxTurns,
+          });
+
+          const loopResult = await loop.run(fixTask);
+
+          const succeeded = loopResult.stopReason !== 'error';
+          return {
+            sessionId: reviewResult.sessionId,
+            success: succeeded,
+            filesModified: loopResult.filesModified,
+            resolvedIssues: succeeded ? structuredIssues.map(i => `${i.title} (${i.file})`) : [],
+            remainingIssues: succeeded ? [] : structuredIssues.map(i => `${i.title} (${i.file})`),
+          };
         },
       },
 
