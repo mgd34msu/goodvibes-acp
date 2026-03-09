@@ -49,6 +49,8 @@ export interface AgentLoopConfig {
   workspaceRoots?: string[];
   /** Called whenever the agent successfully reads a file (for reference tracking) */
   onFileRead?: (path: string) => void;
+  /** Maximum tokens for LLM responses */
+  maxTokens?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +112,11 @@ export class AgentLoop {
 
   constructor(private readonly config: AgentLoopConfig) {}
 
+  /** Public read-only view of files modified so far (e.g. for timeout capture) */
+  get filesModified(): string[] {
+    return Array.from(this._filesModified);
+  }
+
   async run(task: string): Promise<AgentLoopResult> {
     const messages: LLMMessage[] = [{ role: 'user', content: task }];
     const toolDefs = this._collectToolDefinitions();
@@ -146,6 +153,7 @@ export class AgentLoop {
           messages,
           tools: toolDefs.length > 0 ? toolDefs : undefined,
           signal: this.config.signal,
+          maxTokens: this.config.maxTokens,
         };
         // TODO ISS-060: This uses non-streaming chat(). Switch to provider.stream() to enable
         // agent_message_chunk ACP updates during LLM inference (KB-04 lines 91-117).

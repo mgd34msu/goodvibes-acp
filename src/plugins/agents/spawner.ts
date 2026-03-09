@@ -58,6 +58,8 @@ type AgentState = {
   finishedAt?: number;
   /** AbortController for real AgentLoop cancellation */
   controller?: AbortController;
+  /** Reference to the running AgentLoop — used to capture filesModified on timeout */
+  loop?: AgentLoop;
   /** Pending timer handle for stub simulation (used when no LLM provider) */
   timer?: ReturnType<typeof setTimeout>;
   /** Timeout timer handle — cleared when agent reaches a terminal state */
@@ -144,6 +146,15 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
       const llmProvider = this._registry!.get<ILLMProvider>('llm-provider');
       const toolProviders = this._registry!.getAll<IToolProvider>('tool-provider');
 
+      let sessionCwd: string | undefined;
+      try {
+        const sessionMgr = this._registry!.get<{ get(id: string): Promise<{ config: { cwd: string } } | undefined> }>('session-manager');
+        if (sessionMgr) {
+          const session = await sessionMgr.get(config.sessionId);
+          sessionCwd = session?.config?.cwd;
+        }
+      } catch { /* continue without cwd */ }
+
       const controller = new AbortController();
       state.controller = controller;
 
@@ -156,9 +167,15 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
         model,
         systemPrompt,
         maxTurns: typeConfig.maxTurns,
+        maxTokens: typeConfig.maxTokens,
         signal: controller.signal,
         onProgress: this._onProgressFactory?.(config.sessionId),
+        cwd: sessionCwd,
+        workspaceRoots: sessionCwd ? [sessionCwd] : undefined,
       });
+
+      // Store loop reference so timeout can capture any files written before expiry
+      state.loop = loop;
 
       // Run in background — state machine fires when it settles
       const resultPromise = loop.run(config.task);
@@ -174,7 +191,7 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
             usage: { inputTokens: 0, outputTokens: 0 },
             stopReason: 'error',
             error: `Agent exceeded timeout of ${timeoutMs}ms`,
-            filesModified: [],
+            filesModified: loop.filesModified,
           });
         }
       }, timeoutMs);

@@ -26,6 +26,8 @@ export type AgentTypeConfig = {
   defaultTimeoutMs: number;
   /** Maximum number of agentic turns before the loop is forced to stop */
   maxTurns: number;
+  /** Maximum tokens per LLM response */
+  maxTokens: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -87,21 +89,28 @@ ${TOOLS_REFERENCE}
 - Build responsive, accessible UI components
 - Integrate styling solutions (Tailwind, CSS Modules, styled-components)
 
-## Enterprise Standards
+## Enterprise Standards (CRITICAL)
 
-No mocks, no placeholders, no shortcuts. Every implementation must:
+NEVER create placeholder, stub, mock, or skeleton code. NEVER use comments like "TODO: implement" or "// add implementation here". NEVER create empty functions or functions that just throw "not implemented". Every file you write must contain COMPLETE, WORKING, PRODUCTION-READY code.
+
+Every implementation must:
 - Be production-ready with full error handling and proper TypeScript types (no any)
 - Follow security best practices (validation, no SQL injection, no XSS)
 - Follow existing project patterns and naming conventions
 - Be performant (avoid N+1 queries, use proper indexes)
+- Include ALL necessary imports, types, and dependencies
+- Actually work — if you create an API endpoint, it must handle requests; if you create a utility, it must perform its function
+
+If a task is too large to complete in full, implement the most critical parts completely rather than scaffolding everything as empty shells. Partial but real code is infinitely better than complete but fake code.
 
 ## Post-Edit Validation (MANDATORY)
 
 After every code edit, validate with:
   precision__precision_exec: npm run typecheck
   precision__precision_exec: npm run lint`,
-    defaultTimeoutMs: 300_000,
+    defaultTimeoutMs: 600_000,
     maxTurns: 50,
+    maxTokens: 8192,
   },
 
   reviewer: {
@@ -146,6 +155,7 @@ ${TOOLS_REFERENCE}
 - Use outline extract mode to understand file structure before reading full content`,
     defaultTimeoutMs: 120_000,
     maxTurns: 15,
+    maxTokens: 8192,
   },
 
   tester: {
@@ -190,6 +200,7 @@ ${TOOLS_REFERENCE}
 - Always check existing test patterns before writing new tests`,
     defaultTimeoutMs: 180_000,
     maxTurns: 30,
+    maxTokens: 8192,
   },
 
   architect: {
@@ -243,6 +254,7 @@ Provide structured plans with:
 - Risk assessment and mitigation strategies`,
     defaultTimeoutMs: 120_000,
     maxTurns: 15,
+    maxTokens: 8192,
   },
 
   deployer: {
@@ -285,6 +297,7 @@ Before deploying:
 5. Verify monitoring is in place`,
     defaultTimeoutMs: 180_000,
     maxTurns: 20,
+    maxTokens: 8192,
   },
 
   integrator: {
@@ -317,6 +330,7 @@ ${TOOLS_REFERENCE}
 - Make architectural decisions (delegate to architect agent)`,
     defaultTimeoutMs: 300_000,
     maxTurns: 30,
+    maxTokens: 8192,
   },
 
   'skill-factory': {
@@ -384,6 +398,7 @@ SKILL.md frontmatter:
 - Write application tests (delegate to tester agent)`,
     defaultTimeoutMs: 180_000,
     maxTurns: 25,
+    maxTokens: 8192,
   },
 
   'agent-factory': {
@@ -449,5 +464,6 @@ Examples:
 - Create skills (delegate to skill-factory agent)`,
     defaultTimeoutMs: 180_000,
     maxTurns: 25,
+    maxTokens: 8192,
   },
 };
