@@ -72,6 +72,23 @@ export type RuntimeConfig = {
 // Session config option
 // ---------------------------------------------------------------------------
 
+/**
+ * A grouped set of options for a select-type config option.
+ * Supports the ACP spec grouped options format.
+ */
+export type SessionConfigSelectGroup = {
+  /** Group display label */
+  label: string;
+  /** Options within this group */
+  options: SessionConfigOptionChoice[];
+};
+
+/**
+ * Category grouping for session config options.
+ * Matches ACP spec `SessionConfigOptionCategory`.
+ */
+export type SessionConfigOptionCategory = 'model' | 'general' | 'advanced' | string;
+
 /** A selectable option within a select-type config option */
 export type SessionConfigOptionChoice = {
   /** Machine value */
@@ -106,7 +123,7 @@ export type SessionConfigOption = {
   /** Human-readable display name */
   name: string;
   /** Category grouping */
-  category: string;
+  category?: SessionConfigOptionCategory;
   /** Control type */
   type: SessionConfigOptionType;
   /**
@@ -116,10 +133,12 @@ export type SessionConfigOption = {
    * values apply. If boolean type support is added in future, widen to `string | boolean`.
    */
   currentValue: string;
-  /** Available choices (for select type) */
-  options?: SessionConfigOptionChoice[];
+  /** Available choices (for select type) — supports flat or grouped options */
+  options: SessionConfigOptionChoice[] | SessionConfigSelectGroup[];
   /** Optional description / tooltip text */
   description?: string;
+  /** Optional extensibility metadata per ACP spec */
+  _meta?: { [key: string]: unknown } | null;
 };
 
 // ---------------------------------------------------------------------------

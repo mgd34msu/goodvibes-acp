@@ -266,8 +266,9 @@ export type AcpSessionUpdateType =
   | 'tool_call_update'
   | 'plan'
   | 'agent_thought_chunk'
-  | 'session_info'
-  | 'available_commands'
-  | 'current_mode'
-  | 'config_option'
-  | 'finish';
+  | 'user_message_chunk'
+  | 'usage_update'
+  | 'session_info_update'
+  | 'available_commands_update'
+  | 'current_mode_update'
+  | 'config_option_update';

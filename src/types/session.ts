@@ -30,13 +30,21 @@ export type SessionMode = 'vibecoding' | 'justvibes' | 'sandbox' | 'plan';
  * An environment variable entry for stdio MCP server subprocesses.
  * Matches ACP spec `EnvVariable` (KB-03).
  */
-export type EnvVariable = { name: string; value: string };
+export type EnvVariable = {
+  name: string;
+  value: string;
+  _meta?: { [key: string]: unknown } | null;
+};
 
 /**
  * An HTTP header entry for HTTP/SSE MCP server connections.
  * Matches ACP spec `HttpHeader` (KB-03).
  */
-export type HttpHeader = { name: string; value: string };
+export type HttpHeader = {
+  name: string;
+  value: string;
+  _meta?: { [key: string]: unknown } | null;
+};
 
 /**
  * MCP server connection definition.
@@ -47,16 +55,14 @@ export type HttpHeader = { name: string; value: string };
  */
 export type MCPServerConfig =
   | {
-      /** Discriminator — identifies this as a stdio MCP server */
-      type: 'stdio';
       /** Server name / identifier */
       name: string;
-      /** Executable command to spawn */
+      /** Executable command to spawn — presence of this field identifies stdio variant */
       command: string;
       /** Command-line arguments */
-      args?: string[];
+      args: string[];
       /** Additional environment variables for the subprocess */
-      env?: EnvVariable[];
+      env: Record<string, string>;
     }
   | {
       /** Discriminator — identifies this as an HTTP or SSE MCP server */
@@ -94,8 +100,8 @@ export type SessionConfigOptionValue = string;
 export type HistoryMessage = {
   /** 'user' or 'assistant' */
   role: 'user' | 'assistant';
-  /** Message content */
-  content: string;
+  /** Message content — string for plain text, or an array of content blocks for rich content */
+  content: Array<{ type: string; [key: string]: unknown }> | string;
   /** Unix timestamp (ms) */
   timestamp: number;
 };

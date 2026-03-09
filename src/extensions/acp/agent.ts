@@ -9,7 +9,7 @@
 import type { Agent, AgentSideConnection } from '@agentclientprotocol/sdk';
 import type * as schema from '@agentclientprotocol/sdk';
 import { PROTOCOL_VERSION } from '@agentclientprotocol/sdk';
-import type { SessionContext } from '../../types/session.js';
+import type { SessionContext, HistoryMessage } from '../../types/session.js';
 import { SessionManager } from '../sessions/manager.js';
 import { Registry } from '../../core/registry.js';
 import { EventBus } from '../../core/event-bus.js';
@@ -277,7 +277,7 @@ export class GoodVibesAgent implements Agent {
    * notifications to the client.
    */
   async loadSession(params: schema.LoadSessionRequest): Promise<schema.LoadSessionResponse> {
-    let loaded: { context: SessionContext; history: Array<{ role: string; content: string; timestamp: number }> };
+    let loaded: { context: SessionContext; history: HistoryMessage[] };
 
     try {
       loaded = await this.sessions.load(params.sessionId);
@@ -312,7 +312,12 @@ export class GoodVibesAgent implements Agent {
 
       await this.conn.sessionUpdate({
         sessionId: params.sessionId,
-        update: messageChunkUpdate(updateType, { type: 'text', text: msg.content }),
+        update: messageChunkUpdate(
+            updateType,
+            typeof msg.content === 'string'
+              ? { type: 'text', text: msg.content }
+              : { type: 'text', text: '' },
+          ),
       });
     }
 
