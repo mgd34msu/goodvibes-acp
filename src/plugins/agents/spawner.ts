@@ -218,7 +218,7 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
               usage: { inputTokens: 0, outputTokens: 0 },
               stopReason: 'error',
               error: String(err),
-              filesModified: [],
+              filesModified: loop.filesModified,
             });
           }
         },
@@ -302,6 +302,7 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
       state.timeoutTimer = undefined;
     }
 
+    state.filesModified = state.loop?.filesModified ?? state.filesModified;
     state.status = 'cancelled';
     state.finishedAt = Date.now();
 
