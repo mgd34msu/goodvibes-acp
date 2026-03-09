@@ -18,7 +18,7 @@
  * ACP spec-defined values (KB-05): 'shell' | 'file_write' | 'file_delete' | 'network' | 'browser'
  * The protocol allows custom string types — this union is intentionally open.
  *
- * GoodVibes internal extensions (not ACP spec): 'mcp' | 'extension'
+ * GoodVibes internal extensions (not ACP spec): '_goodvibes/mcp' | '_goodvibes/extension'
  */
 export type PermissionType =
   | 'shell'
@@ -26,8 +26,8 @@ export type PermissionType =
   | 'file_delete'
   | 'network'
   | 'browser'
-  | 'mcp'
-  | 'extension'
+  | '_goodvibes/mcp'
+  | '_goodvibes/extension'
   | (string & {});
 
 // ---------------------------------------------------------------------------
@@ -75,7 +75,7 @@ export type PermissionRequest = {
    * completeness but callers should not rely on it being read.
    */
   sessionId?: string;
-  /** Optional: tool name when type is 'mcp' */
+  /** Optional: tool name when type is '_goodvibes/mcp' */
   toolName?: string;
   /** The UUID from the preceding tool_call update; used as toolCallId in ACP permission requests */
   toolCallId?: string;

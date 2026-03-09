@@ -9,7 +9,7 @@
  * Each WRFC phase emits:
  *   1. tool_call (pending)       — phase announced
  *   2. tool_call_update (in_progress) — phase executing
- *   3. tool_call_update (completed | failed) — phase finished
+ *   3. tool_call_update (completed) — phase finished (review not-passed is still 'completed'; pass/fail in _meta)
  */
 
 import type { Disposable, EventBus } from '../../core/event-bus.js';
@@ -196,7 +196,7 @@ export class WRFCEventBridge {
       this.eventBus.on<ReviewCompletePayload>('wrfc:review-complete', (event) => {
         const p = event.payload as ReviewCompletePayload;
         const toolCallId = this._toolCallId(p.workId, 'review');
-        const status: acp.ToolCallStatus = p.passed ? 'completed' : 'failed';
+        const status: acp.ToolCallStatus = 'completed';
         const reviewContent: acp.ToolCallContent[] = [
           { type: 'content', content: { type: 'text', text: `Review ${p.passed ? 'passed' : 'failed'}. Score: ${p.score}.` } },
         ];

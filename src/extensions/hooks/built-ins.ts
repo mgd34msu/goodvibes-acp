@@ -21,7 +21,7 @@ export interface HookContext {
   sessionId?: string;
   /**
    * ACP-aligned metadata bag for internal fields (ISS-019).
-   * Internal metadata such as `_validationError`, `_permissionChecked`, and `_abort`
+   * Internal metadata such as `_goodvibes/validationError`, `_goodvibes/permissionChecked`, and `_goodvibes/abort`
    * should be stored here rather than at the root of the context object.
    */
   _meta?: Record<string, unknown>;

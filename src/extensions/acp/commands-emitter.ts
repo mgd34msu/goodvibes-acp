@@ -45,37 +45,37 @@ const GOODVIBES_COMMANDS: AgentCommand[] = [
     id: 'status',
     name: 'Show runtime status',
     description: 'Show runtime status and health',
-    _meta: { category: 'info' },
+    _meta: { '_goodvibes/category': 'info' },
   },
   {
     id: 'agents',
     name: 'List active agents',
     description: 'List active agent chains',
-    _meta: { category: 'info' },
+    _meta: { '_goodvibes/category': 'info' },
   },
   {
     id: 'analytics',
     name: 'Show token analytics',
     description: 'Show token usage and budget',
-    _meta: { category: 'info' },
+    _meta: { '_goodvibes/category': 'info' },
   },
   {
     id: 'mode',
     name: 'Switch runtime mode',
     description: 'Switch runtime mode (justvibes/vibecoding/plan/sandbox)',
-    _meta: { category: 'config' },
+    _meta: { '_goodvibes/category': 'config' },
   },
   {
     id: 'review',
     name: 'Trigger code review',
     description: 'Trigger manual code review',
-    _meta: { category: 'quality' },
+    _meta: { '_goodvibes/category': 'quality' },
   },
   {
     id: 'cancel',
     name: 'Cancel current operation',
     description: 'Cancel current operation',
-    _meta: { category: 'control' },
+    _meta: { '_goodvibes/category': 'control' },
   },
 ];
 

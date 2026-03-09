@@ -129,7 +129,7 @@ export class HookRegistrar {
     // tool:execute — pre: permission check (ISS-018, ISS-021)
     // Calls PermissionGate.check() when a gate is wired in. If permission is denied,
     // sets _meta['_goodvibes/permissionDenied']: true on the context. Callers should check
-    // this flag and abort the tool call, emitting tool_call_update(status: 'error').
+    // this flag and abort the tool call, emitting tool_call_update(status: 'failed').
     engine.register(
       'tool:execute',
       'pre',
@@ -144,10 +144,10 @@ export class HookRegistrar {
             if (!pt) {
               const tn = (context.toolName as string | undefined) ?? 'unknown';
               console.warn(
-                `[HookRegistrar] tool:execute pre-hook: permissionType not set for tool '${tn}', defaulting to 'mcp'`
+                `[HookRegistrar] tool:execute pre-hook: permissionType not set for tool '${tn}', defaulting to '_goodvibes/mcp'`
               );
             }
-            return pt ?? 'mcp';
+            return pt ?? '_goodvibes/mcp';
           })(),
             toolCallId: context.toolCallId as string | undefined,
             toolName,
@@ -200,14 +200,17 @@ export class HookRegistrar {
         const failed = Boolean(meta['_goodvibes/permissionDenied']);
         const permissionReason = meta['_goodvibes/permissionReason'] as string | undefined;
         bus.emit('tool:call:update', {
+          sessionUpdate: 'tool_call_update',
           toolCallId,
-          toolName,
-          status: failed ? 'error' : 'completed',
+          status: failed ? 'failed' : 'completed',
           content: failed
             ? [{ type: 'text', text: `Permission denied${permissionReason ? `: ${permissionReason}` : ''}` }]
             : (result !== null && result !== undefined ? [{ type: 'text', text: String(result) }] : undefined),
-          rawOutput: result ?? null,
-          _meta: failed ? { '_goodvibes/permissionReason': permissionReason } : undefined,
+          _meta: {
+            ...(failed ? { '_goodvibes/permissionReason': permissionReason } : {}),
+            '_goodvibes/rawOutput': result ?? null,
+            '_goodvibes/toolName': toolName,
+          },
         });
       },
       100

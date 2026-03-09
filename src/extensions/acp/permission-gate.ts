@@ -35,16 +35,16 @@ import type { PermissionRequest, PermissionResult, PermissionPolicy, PermissionT
  * - `sandbox`    → custom restricted mode (fs/mcp auto-approved; extensions always denied)
  */
 // ISS-068: Use spec-defined permission types (file_write, file_delete, network, browser)
-// instead of the non-spec 'fs' category. 'mcp' and 'extension' are GoodVibes extensions
+// instead of the non-spec 'fs' category. '_goodvibes/mcp' and '_goodvibes/extension' are GoodVibes extensions
 // allowed by the spec's open-ended permission type string.
 export const MODE_POLICIES: Record<string, PermissionPolicy> = {
   justvibes: {
-    autoApprove: ['file_write', 'file_delete', 'network', 'browser', 'shell', 'mcp', 'extension'],
+    autoApprove: ['file_write', 'file_delete', 'network', 'browser', 'shell', '_goodvibes/mcp', '_goodvibes/extension'],
     alwaysDeny: [],
     promptForUnknown: false,
   },
   vibecoding: {
-    autoApprove: ['file_write', 'file_delete', 'shell', 'mcp'],
+    autoApprove: ['file_write', 'file_delete', 'shell', '_goodvibes/mcp'],
     alwaysDeny: [],
     promptForUnknown: true,
   },
@@ -57,8 +57,8 @@ export const MODE_POLICIES: Record<string, PermissionPolicy> = {
     promptForUnknown: true,
   },
   sandbox: {
-    autoApprove: ['mcp', 'file_write'],
-    alwaysDeny: ['extension', 'network', 'browser'],
+    autoApprove: ['_goodvibes/mcp', 'file_write'],
+    alwaysDeny: ['_goodvibes/extension', 'network', 'browser'],
     promptForUnknown: true,
   },
 };
