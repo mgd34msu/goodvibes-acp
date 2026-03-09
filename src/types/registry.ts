@@ -238,6 +238,13 @@ export interface ITextFileAccess {
 export type TerminalCreateOptions = {
   /** The command to execute */
   command?: string;
+  /**
+   * Arguments to pass to the command as a separate array.
+   * When provided, the process is spawned with `shell: false`, which avoids
+   * shell interpretation and eliminates shell injection risk.
+   * When omitted, the command string is passed to the shell directly.
+   */
+  args?: string[];
   /** Environment variables to set */
   env?: Record<string, string>;
   /** Working directory (absolute path) */

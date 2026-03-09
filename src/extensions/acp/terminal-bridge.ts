@@ -69,7 +69,7 @@ export class AcpTerminal implements ITerminal {
    */
   async create(opts: TerminalCreateOptions): Promise<TerminalHandle> {
     const id = `term-${this._nextId++}`;
-    const { command = '', env, cwd } = opts;
+    const { command = '', args, env, cwd } = opts;
     const handle: TerminalHandle = {
       id,
       command,
@@ -98,21 +98,26 @@ export class AcpTerminal implements ITerminal {
       let exitCode: number | null = null;
 
       /**
-       * Use shell: true for the spawn fallback because `command` is a bare string
-       * (TerminalCreateOptions has no separate args array). Shell interpretation is
-       * required to support pipes, redirects, and other shell features.
-       * Tradeoff: slightly lower security due to shell injection risk if `command`
-       * is user-controlled. Callers must sanitize untrusted command input.
-       * shell: false would be preferred if args were supplied separately, as it
-       * avoids shell interpretation entirely and reduces injection surface.
+       * When `args` is provided, use shell: false to avoid shell interpretation
+       * and eliminate shell injection risk entirely.
+       * When only a command string is provided (no args), fall back to shell: true
+       * for compatibility with pipes, redirects, and compound shell expressions.
+       * In the shell: true path, the permission gate (ISS-021) is the intended
+       * mitigation for injection risk from caller-controlled command strings.
        */
-      const useShell = true; // bare command strings may need shell interpretation
-      const proc = spawn(command, [], {
-        cwd: cwd ?? this.cwd,
-        shell: useShell,
-        stdio: 'pipe',
-        env: env ? { ...process.env, ...env } : process.env,
-      });
+      const proc = args !== undefined
+        ? spawn(command, args, {
+            cwd: cwd ?? this.cwd,
+            shell: false,
+            stdio: 'pipe',
+            env: env ? { ...process.env, ...env } : process.env,
+          })
+        : spawn(command, [], {
+            cwd: cwd ?? this.cwd,
+            shell: true,
+            stdio: 'pipe',
+            env: env ? { ...process.env, ...env } : process.env,
+          });
 
       const internal: SpawnBackedHandle = {
         kind: 'spawn',
@@ -156,13 +161,14 @@ export class AcpTerminal implements ITerminal {
       // Promise.race as a fallback. When the SDK is updated to accept a timeout,
       // forward it as: internal.acpHandle.currentOutput({ timeout })
       const outputPromise = internal.acpHandle.currentOutput();
+      let outputTimer: ReturnType<typeof setTimeout> | undefined;
       const result: schema.TerminalOutputResponse = timeout !== undefined
         ? await Promise.race([
             outputPromise,
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error(`output() timed out after ${timeout}ms`)), timeout)
-            ),
-          ])
+            new Promise<never>((_, reject) => {
+              outputTimer = setTimeout(() => reject(new Error(`output() timed out after ${timeout}ms`)), timeout);
+            }),
+          ]).finally(() => clearTimeout(outputTimer))
         : await outputPromise;
       return {
         output: result.output,
@@ -209,12 +215,13 @@ export class AcpTerminal implements ITerminal {
       });
 
       if (timeout !== undefined) {
+        let acpExitTimer: ReturnType<typeof setTimeout> | undefined;
         return Promise.race([
           exitPromise,
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error(`waitForExit() timed out after ${timeout}ms`)), timeout)
-          ),
-        ]);
+          new Promise<never>((_, reject) => {
+            acpExitTimer = setTimeout(() => reject(new Error(`waitForExit() timed out after ${timeout}ms`)), timeout);
+          }),
+        ]).finally(() => clearTimeout(acpExitTimer));
       }
       return exitPromise;
     }
@@ -226,7 +233,7 @@ export class AcpTerminal implements ITerminal {
     const waitPromise = new Promise<ExitResult>((resolve) => {
       const finish = () => {
         resolve({
-          exitCode: internal.exitCode ?? 0,
+          exitCode: internal.exitCode ?? -1,
           stdout: internal.stdout.join(''),
           stderr: internal.stderr.join(''),
           durationMs: Date.now() - spawnedAt,
@@ -246,12 +253,13 @@ export class AcpTerminal implements ITerminal {
     });
 
     if (timeout !== undefined) {
+      let spawnExitTimer: ReturnType<typeof setTimeout> | undefined;
       return Promise.race([
         waitPromise,
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`waitForExit() timed out after ${timeout}ms`)), timeout)
-        ),
-      ]);
+        new Promise<never>((_, reject) => {
+          spawnExitTimer = setTimeout(() => reject(new Error(`waitForExit() timed out after ${timeout}ms`)), timeout);
+        }),
+      ]).finally(() => clearTimeout(spawnExitTimer));
     }
     return waitPromise;
   }
