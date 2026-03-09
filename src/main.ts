@@ -51,6 +51,7 @@ import { AnalyticsPlugin } from './plugins/analytics/index.js';
 import { ReviewToolProvider } from './plugins/review/review-tool-provider.js';
 import { calculateScore } from './plugins/review/scoring-engine.js';
 import { buildReviewerPrompt } from './plugins/review/reviewer-prompt.js';
+import { filterReviewableFiles } from './plugins/review/exclusions.js';
 import type { ReviewIssue } from './plugins/review/types.js';
 import { AgentLoop } from './plugins/agents/loop.js';
 import { AGENT_TYPE_CONFIGS } from './plugins/agents/types.js';
@@ -84,6 +85,7 @@ const hookEngine = new HookEngine();
 // ---------------------------------------------------------------------------
 
 const sessionManager = new SessionManager(stateStore, eventBus);
+registry.register('session-manager', sessionManager);
 
 const agentTracker = new AgentTracker(stateStore, eventBus);
 const agentCoordinator = new AgentCoordinator(agentTracker, registry, eventBus, { maxParallel: 6 });
@@ -284,6 +286,13 @@ function createConnection(stream: AcpStream) {
 // implementations that return minimal valid results.
 // ---------------------------------------------------------------------------
 
+async function resolveSessionCwd(sessionId: string): Promise<string | undefined> {
+  try {
+    const session = await sessionManager.get(sessionId);
+    return session?.config?.cwd;
+  } catch { return undefined; }
+}
+
 const wrfcAdapter = {
   run: async (params: { workId: string; sessionId: string; task: string; signal?: AbortSignal }) => {
     const runParams: WRFCRunParams = {
@@ -313,27 +322,46 @@ const wrfcAdapter = {
           // Reset review tool state from any previous run
           reviewToolProvider.reset();
 
-          const llmProvider = registry.getOptional<ILLMProvider>('llm-provider');
-          if (!llmProvider) {
-            console.error('[WRFC] No LLM provider — falling back to pass-through review');
+          console.error(`[WRFC] Review called. filesModified=${workResult.filesModified.length}: ${workResult.filesModified.join(', ')}`);
+
+          const reviewableFiles = filterReviewableFiles(workResult.filesModified);
+          console.error(`[WRFC] After exclusion filter: ${reviewableFiles.length} reviewable files`);
+          if (reviewableFiles.length === 0) {
+            console.error('[WRFC] No reviewable files after exclusion filtering');
             return {
               sessionId: workResult.sessionId,
-              score: 10,
+              score: 0,
               dimensions: {},
-              passed: true,
-              issues: [],
-              notes: 'No LLM provider configured — skipping review',
+              passed: false,
+              issues: ['No reviewable files found — all modified files are in excluded paths (node_modules, dist, etc.)'],
+              notes: 'All modified files excluded from review',
+            };
+          }
+
+          const llmProvider = registry.getOptional<ILLMProvider>('llm-provider');
+          if (!llmProvider) {
+            console.error('[WRFC] No LLM provider — cannot perform review');
+            return {
+              sessionId: workResult.sessionId,
+              score: 0,
+              dimensions: {},
+              passed: false,
+              issues: ['No LLM provider configured — cannot perform review'],
+              notes: 'No LLM provider configured — cannot review',
             };
           }
 
           const reviewerConfig = AGENT_TYPE_CONFIGS['reviewer'];
           const toolProviders = registry.getAll<IToolProvider>('tool-provider');
+          console.error(`[WRFC] Reviewer tool providers: ${toolProviders.map(p => p.name).join(', ')} (${toolProviders.reduce((n, p) => n + p.tools.length, 0)} tools total)`);
 
           const reviewerPrompt = buildReviewerPrompt({
             task: workResult.task,
-            filesModified: workResult.filesModified,
+            filesModified: reviewableFiles,
             minScore: minReviewScore,
           });
+
+          const sessionCwd = await resolveSessionCwd(params.sessionId);
 
           const loop = new AgentLoop({
             provider: llmProvider,
@@ -342,23 +370,26 @@ const wrfcAdapter = {
             systemPrompt: reviewerPrompt,
             maxTurns: reviewerConfig.maxTurns,
             onFileRead: (path) => reviewToolProvider.trackFileRead(path),
+            cwd: sessionCwd,
+            workspaceRoots: sessionCwd ? [sessionCwd] : undefined,
           });
 
-          await loop.run(
-            `Review the following files that were modified:\n${workResult.filesModified.map(f => '- ' + f).join('\n')}\n\nAgent output:\n${workResult.output}`,
+          const loopResult = await loop.run(
+            `Review the following files that were modified:\n${reviewableFiles.map(f => '- ' + f).join('\n')}\n\nAgent output:\n${workResult.output}`,
           );
+          console.error(`[WRFC] Reviewer loop done: turns=${loopResult.turns}, stopReason=${loopResult.stopReason}, outputLen=${loopResult.output.length}${loopResult.error ? ', error=' + loopResult.error : ''}`);
 
           const submittedReview = reviewToolProvider.consumeReview();
 
           if (!submittedReview) {
-            console.error('[WRFC] Reviewer agent did not call submit_review — defaulting to pass');
+            console.error('[WRFC] Reviewer agent did not call submit_review — automatic fail');
             return {
               sessionId: workResult.sessionId,
-              score: 10,
+              score: 0,
               dimensions: {},
-              passed: true,
-              issues: [],
-              notes: 'Reviewer did not submit structured review — defaulting to pass',
+              passed: false,
+              issues: ['Reviewer agent did not submit a structured review via submit_review tool'],
+              notes: 'Reviewer failed to call submit_review — automatic fail',
             };
           }
 
@@ -431,12 +462,16 @@ const wrfcAdapter = {
           const engineerConfig = AGENT_TYPE_CONFIGS['engineer'];
           const toolProviders = registry.getAll<IToolProvider>('tool-provider');
 
+          const fixerSessionCwd = await resolveSessionCwd(params.sessionId);
+
           const loop = new AgentLoop({
             provider: llmProvider,
             tools: toolProviders,
             model: engineerConfig.defaultModel,
             systemPrompt: engineerConfig.systemPromptPrefix,
             maxTurns: engineerConfig.maxTurns,
+            cwd: fixerSessionCwd,
+            workspaceRoots: fixerSessionCwd ? [fixerSessionCwd] : undefined,
           });
 
           const loopResult = await loop.run(fixTask);

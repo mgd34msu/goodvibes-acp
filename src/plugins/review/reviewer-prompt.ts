@@ -94,5 +94,7 @@ Each issue must have:
 - Every issue needs specific file/title/description
 - The fixer receives your issues directly and acts on your descriptions, so write them as actionable instructions
 - For references, only reference files you actually read during this review
-- Call submit_review exactly once with ALL findings`;
+- Call submit_review exactly once with ALL findings
+- Skip node_modules, dist, build, .next, coverage, lock files, and other generated/vendored content
+- Only review source code files that the engineer actually wrote or modified`;
 }
