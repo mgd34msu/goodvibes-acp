@@ -91,7 +91,15 @@ export class McpBridge {
   async disconnect(serverId: string): Promise<void> {
     const conn = this._connections.get(serverId);
     if (!conn) return;
+    // ISS-068: Await subprocess exit with a 5s timeout to avoid orphaned processes.
+    // Register the exit listener BEFORE calling close() to avoid a race where the
+    // process exits between the kill and the listener registration.
+    const exitPromise = new Promise<void>((resolve) => conn.client.once('exit', () => resolve()));
     conn.client.close();
+    await Promise.race([
+      exitPromise,
+      new Promise<void>((resolve) => setTimeout(resolve, 5000)),
+    ]);
     this._connections.delete(serverId);
     this.eventBus.emit('mcp:disconnected', { serverId });
   }
@@ -228,12 +236,9 @@ export class McpBridge {
     //
     //   Future work:
     //   1. Emit an `mcp:error` event so the session layer can notify the ACP client.
-    //   2. Declare `mcp: { http: false, sse: false }` in agentCapabilities during
-    //      `initialize` so the client knows the limitation upfront.
     //
-    // NOTE: Agent capability declaration (`mcp: { http: false, sse: false }`) should
-    // be added to the agent descriptor in src/extensions/acp/agent.ts once that
-    // field is part of the ACP capability schema.
+    // NOTE (ISS-007 resolved): `mcpCapabilities: { http: false, sse: false }` is
+    // declared in agentCapabilities in src/extensions/acp/agent.ts — done.
     // NOTE: console.error is intentional here — this runs during MCP bridge bootstrap,
     // before a structured logger is available.
     console.error(`[MCP] Skipping non-stdio server "${server.name}": HTTP/SSE transport not yet supported`);

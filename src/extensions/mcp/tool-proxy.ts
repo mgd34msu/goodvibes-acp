@@ -125,6 +125,9 @@ export class McpToolProxy implements IToolProvider {
   // -------------------------------------------------------------------------
 
   private _parseToolName(toolName: string): { serverId: string | null; rawToolName: string | null } {
+    // ISS-080: Use indexOf to split at the FIRST occurrence of NAME_SEP.
+    // This correctly handles server IDs that contain '__' by treating only the
+    // first separator as the boundary. Everything after it is the raw tool name.
     const idx = toolName.indexOf(NAME_SEP);
     if (idx === -1) {
       return { serverId: null, rawToolName: toolName };

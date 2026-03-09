@@ -31,6 +31,13 @@ type JsonRpcResponse = {
   error?: { code: number; message: string; data?: unknown };
 };
 
+/** A JSON-RPC 2.0 notification (no id, server-initiated) */
+type JsonRpcNotification = {
+  jsonrpc: '2.0';
+  method: string;
+  params?: unknown;
+};
+
 /** MCP tool definition as returned by tools/list */
 export type McpToolDef = {
   name: string;
@@ -70,6 +77,8 @@ export class McpClient extends EventEmitter {
   private _ready = false;
   private _closed = false;
   private _serverCapabilities: Record<string, unknown> | undefined = undefined;
+  /** Consecutive JSON parse failure count — escalates to error after threshold */
+  private _parseFailCount = 0;
 
   constructor(process: ChildProcess) {
     super();
@@ -84,22 +93,41 @@ export class McpClient extends EventEmitter {
       const trimmed = line.trim();
       if (!trimmed) return;
       try {
-        const msg = JSON.parse(trimmed) as JsonRpcResponse;
-        if (typeof msg.id === 'number') {
-          const pending = this._pending.get(msg.id);
+        const msg = JSON.parse(trimmed) as JsonRpcResponse | JsonRpcNotification;
+        // Reset parse failure counter on successful parse
+        this._parseFailCount = 0;
+        if ('id' in msg && typeof msg.id === 'number') {
+          // Response to a pending request
+          const response = msg as JsonRpcResponse;
+          const pending = this._pending.get(response.id);
           if (pending) {
-            this._pending.delete(msg.id);
-            if (msg.error) {
-              pending.reject(new Error(`MCP error ${msg.error.code}: ${msg.error.message}`));
+            this._pending.delete(response.id);
+            if (response.error) {
+              pending.reject(new Error(`MCP error ${response.error.code}: ${response.error.message}`));
             } else {
-              pending.resolve(msg.result);
+              pending.resolve(response.result);
             }
+          }
+        } else if ('method' in msg && typeof (msg as JsonRpcNotification).method === 'string') {
+          // Server-initiated notification (no id) — emit as event
+          const notification = msg as JsonRpcNotification;
+          this.emit('mcp:notification', notification);
+          if (notification.method === 'notifications/tools/list_changed') {
+            // Signal that the tool list changed; callers can re-fetch
+            this.emit('mcp:tools:changed');
           }
         }
       } catch {
-        // Ignore non-JSON lines (server stderr noise on stdout is unusual but safe to ignore).
-        // Log at debug level so persistent parse failures are visible for diagnostics (ISS-075).
-        console.debug('[McpClient] ignoring non-JSON line:', trimmed.substring(0, 100));
+        // Track consecutive parse failures and escalate after threshold (ISS-065)
+        this._parseFailCount++;
+        const preview = trimmed.substring(0, 100);
+        if (this._parseFailCount >= 3) {
+          console.error(
+            `[McpClient] ${this._parseFailCount} consecutive JSON parse failures — last line: ${preview}`,
+          );
+        } else {
+          console.debug('[McpClient] ignoring non-JSON line:', preview);
+        }
       }
     });
 
@@ -203,10 +231,20 @@ export class McpClient extends EventEmitter {
       });
       const msg: JsonRpcRequest = { jsonrpc: '2.0', id, method, params };
       if (!this._process.stdin) {
+        // Clean up the pending entry before rejecting
+        this._pending.delete(id);
+        clearTimeout(timer);
         reject(new Error('stdin is not available'));
         return;
       }
-      this._process.stdin.write(JSON.stringify(msg) + '\n', 'utf8');
+      try {
+        this._process.stdin.write(JSON.stringify(msg) + '\n', 'utf8');
+      } catch (writeErr) {
+        // ISS-067: Write failed — clean up pending entry to avoid leak
+        this._pending.delete(id);
+        clearTimeout(timer);
+        reject(writeErr instanceof Error ? writeErr : new Error(String(writeErr)));
+      }
     });
   }
 
@@ -263,8 +301,16 @@ export function createMcpStdioTransport(options: McpStdioTransportOptions): McpC
     },
   });
 
-  // Forward stderr to process stderr so operator can see MCP server logs
-  child.stderr?.pipe(process.stderr);
+  // ISS-006: Forward stderr line-by-line with server name prefix instead of piping
+  // directly. Piping pollutes the ACP ndjson transport stream; prefixed lines are
+  // distinguishable from protocol traffic in operator logs.
+  const serverName = options.name;
+  child.stderr?.on('data', (chunk: Buffer) => {
+    const lines = chunk.toString().split('\n').filter(Boolean);
+    for (const line of lines) {
+      console.error(`[mcp:${serverName}] ${line}`);
+    }
+  });
 
   return new McpClient(child);
 }
