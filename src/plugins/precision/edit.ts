@@ -144,8 +144,10 @@ export class PrecisionEditTool {
     const pendingWrites = new Map<string, string>(fileContents);
 
     for (const edit of params.edits) {
+      const findStr = typeof edit.find === 'string' ? edit.find : JSON.stringify(edit.find, null, 2);
+      const replaceStr = typeof edit.replace === 'string' ? edit.replace : JSON.stringify(edit.replace, null, 2);
       const editId =
-        edit.id ?? `${edit.path}:${edit.find.slice(0, 40)}`;
+        edit.id ?? `${edit.path}:${findStr.slice(0, 40)}`;
 
       // Check if file was readable
       const readError = fileReadErrors.get(edit.path);
@@ -177,8 +179,8 @@ export class PrecisionEditTool {
       const occurrence: OccurrenceMode = edit.occurrence ?? 'first';
       const { result, replacements } = applyReplacement(
         current,
-        edit.find,
-        edit.replace,
+        findStr,
+        replaceStr,
         occurrence
       );
 
@@ -188,7 +190,7 @@ export class PrecisionEditTool {
           path: edit.path,
           success: false,
           replacements: 0,
-          error: `Find string not found in ${edit.path}: ${JSON.stringify(edit.find.slice(0, 80))}`,
+          error: `Find string not found in ${edit.path}: ${JSON.stringify(findStr.slice(0, 80))}`,
         });
         editsFailed++;
         continue;

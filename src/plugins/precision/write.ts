@@ -69,7 +69,8 @@ export class PrecisionWriteTool {
     for (const entry of params.files) {
       const mode = entry.mode ?? 'fail_if_exists';
       const encoding = (entry.encoding ?? 'utf-8') as BufferEncoding;
-      const content = entry.content ?? '';
+      const rawContent = entry.content ?? '';
+      const content = typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent, null, 2);
 
       try {
         // Ensure parent directory exists
