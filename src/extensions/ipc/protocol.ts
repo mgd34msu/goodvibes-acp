@@ -31,12 +31,21 @@ export interface IpcError {
 export interface IpcMessage {
   /** JSON-RPC 2.0 version string — always '2.0' */
   jsonrpc: '2.0';
-  /** Discriminant — message category (e.g. 'request', 'response', 'notification') */
+  /**
+   * Internal discriminant — message category (e.g. 'request', 'response', 'notification').
+   * @internal Not serialized on the wire; stripped by serializeMessage.
+   */
   type: string;
   /** Unique message identifier (monotonic counter or cuid) */
   id: string;
-  /** Optional metadata bag (e.g. timestamp, W3C trace context) */
-  _meta?: Record<string, unknown> & { timestamp?: number };
+  /**
+   * Optional metadata bag for out-of-band context.
+   *
+   * Reserved keys per KB-08 (W3C Trace Context):
+   * - `traceparent` — W3C traceparent header value (e.g. '00-4bf92f3577...-00f067aa...-01')
+   * - `tracestate`  — W3C tracestate header value (vendor-specific k=v pairs)
+   */
+  _meta?: Record<string, unknown> & { timestamp?: number; traceparent?: string; tracestate?: string };
 }
 
 /** An IPC request — expects a correlated IpcResponse */
@@ -49,9 +58,7 @@ export interface IpcRequest extends IpcMessage {
 }
 
 /** An IPC response — id matches the originating IpcRequest id */
-export interface IpcResponse {
-  /** JSON-RPC 2.0 version string — always '2.0' */
-  jsonrpc: '2.0';
+export interface IpcResponse extends Omit<IpcMessage, 'id'> {
   type: 'response';
   /** ID copied from the originating IpcRequest; null for parse errors */
   id: string | null;
@@ -64,8 +71,8 @@ export interface IpcResponse {
 /** A one-way IPC notification (no response expected, no id) */
 export interface IpcNotification extends Omit<IpcMessage, 'id'> {
   type: 'notification';
-  /** The event name (e.g. 'runtime:status-changed') */
-  event: string;
+  /** The method name identifying the notification (e.g. 'runtime:status-changed') */
+  method: string;
   /** Arbitrary notification payload */
   params: unknown;
 }
@@ -77,13 +84,26 @@ export interface IpcNotification extends Omit<IpcMessage, 'id'> {
 /**
  * Serialize an IPC message to a newline-delimited JSON string suitable for
  * sending over a Unix socket.
+ *
+ * The `type` field is an internal-only discriminant and is stripped from the
+ * wire representation per JSON-RPC 2.0 (which uses structural shape, not a
+ * type tag, to distinguish message kinds).
  */
 export function serializeMessage(message: IpcMessage | IpcResponse | IpcNotification): string {
-  return JSON.stringify(message) + '\n';
+  const { type: _type, ...wire } = message as IpcMessage & { type: string };
+  return JSON.stringify(wire) + '\n';
 }
 
 /**
  * Deserialize a single NDJSON line into an IpcMessage.
+ *
+ * Per JSON-RPC 2.0, message kind is inferred from structural shape:
+ * - Notification: has `method`, no `id`
+ * - Request:      has `method` and `id`
+ * - Response:     has `result` or `error` and `id`
+ *
+ * The `type` field is injected internally after structural discrimination
+ * to allow consumers to use it as a discriminant without wire overhead.
  *
  * @throws {SyntaxError} if the line is not valid JSON.
  * @throws {TypeError} if the parsed value is not an object with required fields.
@@ -96,28 +116,40 @@ export function deserializeMessage(line: string): IpcMessage {
   if (
     typeof parsed !== 'object' ||
     parsed === null ||
-    rec.jsonrpc !== '2.0' ||
-    typeof rec.type !== 'string'
+    rec.jsonrpc !== '2.0'
   ) {
     throw new TypeError(
-      'IPC message missing required fields: jsonrpc ("2.0"), type (string)',
+      'IPC message missing required fields: jsonrpc ("2.0")',
     );
   }
 
-  // Notifications do not have an id
-  if (rec.type !== 'notification' && typeof rec.id !== 'string') {
-    throw new TypeError('IPC request/response message missing required field: id (string)');
+  // Infer message kind from structural shape per JSON-RPC 2.0
+  const hasMethod = typeof rec.method === 'string';
+  const hasId = typeof rec.id === 'string' || typeof rec.id === 'number';
+  const hasResult = 'result' in rec;
+  const hasError = typeof rec.error === 'object' && rec.error !== null;
+
+  let type: string;
+  if (hasMethod && !hasId) {
+    // Notification: method present, no id
+    type = 'notification';
+  } else if (hasMethod && hasId) {
+    // Request: method + id
+    type = 'request';
+  } else if ((hasResult || hasError) && (hasId || rec.id === null)) {
+    // Response: result or error + id
+    type = 'response';
+  } else {
+    throw new TypeError(
+      'IPC message could not be classified: must be a request (method+id), ' +
+      'response (result|error + id), or notification (method, no id)',
+    );
   }
 
-  // Additional structural validation per message type
-  if (rec.type === 'request' && typeof rec.method !== 'string') {
-    throw new TypeError('IPC request message missing required field: method (string)');
-  }
-  if (rec.type === 'notification' && typeof rec.event !== 'string') {
-    throw new TypeError('IPC notification message missing required field: event (string)');
-  }
+  // Inject type discriminant for internal consumer use (not a wire field)
+  rec.type = type;
 
-  return parsed as IpcMessage;
+  return rec as unknown as IpcMessage;
 }
 
 /**
@@ -166,13 +198,13 @@ export function buildResponse(
  * Build a well-formed IpcNotification.
  */
 export function buildNotification(
-  event: string,
+  method: string,
   params: unknown = null,
 ): IpcNotification {
   return {
     jsonrpc: '2.0',
     type: 'notification',
-    event,
+    method,
     params,
   };
 }
