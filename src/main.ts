@@ -78,6 +78,14 @@ const eventBus = new EventBus();
 const stateStore = new StateStore();
 const registry = new Registry();
 const config = new Config();
+await config.load('goodvibes.config.json');
+const configValidation = config.validate();
+if (!configValidation.valid) {
+  for (const err of configValidation.errors) {
+    console.error(`[goodvibes-acp] Config warning: ${err}`);
+  }
+}
+registry.register('config', config);
 const hookEngine = new HookEngine();
 
 // ---------------------------------------------------------------------------
@@ -591,6 +599,10 @@ const wrfcAdapter = {
 // ---------------------------------------------------------------------------
 
 // Process mode detection
+// GOODVIBES_MODE is read directly here as a top-level startup override,
+// intentionally outside the nested config env system (GOODVIBES_RUNTIME__MODE).
+// This allows a simple env var to control process mode without requiring
+// the full GOODVIBES_RUNTIME__MODE=daemon notation.
 const mode = process.argv.includes('--daemon') || process.env.GOODVIBES_MODE === 'daemon'
   ? 'daemon' as const
   : 'subprocess' as const;
@@ -616,7 +628,8 @@ async function shutdown(signal: string): Promise<void> {
   await shutdownManager.shutdown();
   // Allow the event loop to drain pending I/O (e.g. finish event socket writes)
   // before forcing exit. The process exits naturally once all handles close.
-  setTimeout(() => process.exit(0), 2000).unref();
+  const gracePeriod = config.get<number>('runtime.agentGracePeriodMs') ?? 2000;
+  setTimeout(() => process.exit(0), gracePeriod).unref();
 }
 
 process.on('SIGINT', () => shutdown('SIGINT'));
@@ -650,21 +663,24 @@ if (mode === 'daemon') {
     return idx !== -1 ? process.argv[idx + 1] : undefined;
   }
 
-  const daemonPort = parseInt(
-    process.env.GOODVIBES_DAEMON_PORT ?? getArgValue('--port') ?? '9000',
-    10,
-  );
+  const daemonPort = config.get<number>('runtime.port') ??
+    parseInt(
+      process.env.GOODVIBES_DAEMON_PORT ?? getArgValue('--port') ?? '9000',
+      10,
+    );
   if (Number.isNaN(daemonPort) || daemonPort < 1 || daemonPort > 65535) {
     throw new Error(
       `[goodvibes-acp] Invalid daemon port: "${process.env.GOODVIBES_DAEMON_PORT ?? getArgValue('--port') ?? '9000'}" — must be an integer between 1 and 65535`,
     );
   }
   const daemonHost =
+    config.get<string>('runtime.host') ??
     process.env.GOODVIBES_DAEMON_HOST ?? getArgValue('--host') ?? '127.0.0.1';
-  const daemonHealthPort = parseInt(
-    process.env.GOODVIBES_DAEMON_HEALTH_PORT ?? getArgValue('--health-port') ?? String(daemonPort + 1),
-    10,
-  );
+  const daemonHealthPort = config.get<number>('health.port') ??
+    parseInt(
+      process.env.GOODVIBES_DAEMON_HEALTH_PORT ?? getArgValue('--health-port') ?? String(daemonPort + 1),
+      10,
+    );
   if (Number.isNaN(daemonHealthPort) || daemonHealthPort < 1 || daemonHealthPort > 65535) {
     throw new Error(
       `[goodvibes-acp] Invalid daemon health port: "${process.env.GOODVIBES_DAEMON_HEALTH_PORT ?? getArgValue('--health-port') ?? String(daemonPort + 1)}" — must be an integer between 1 and 65535`,
