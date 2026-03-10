@@ -39,6 +39,7 @@ import { LogsManager } from './extensions/logs/manager.js';
 import { HookEngine } from './core/hook-engine.js';
 import { HookRegistrar } from './extensions/hooks/registrar.js';
 import { AnthropicProvider } from './plugins/agents/providers/anthropic.js';
+import { OpenAICompatibleProvider } from './plugins/agents/providers/openai-compatible.js';
 import { McpToolProxy } from './extensions/mcp/tool-proxy.js';
 import { ShutdownManager, SHUTDOWN_ORDER } from './extensions/lifecycle/shutdown.js';
 import { HealthCheck } from './extensions/lifecycle/health.js';
@@ -166,7 +167,21 @@ AgentsPlugin.register(registry);
 // ---------------------------------------------------------------------------
 // LLM + Tool providers — these enable the real AgentLoop path in AgentSpawnerPlugin
 // ---------------------------------------------------------------------------
-if (!process.env.ANTHROPIC_API_KEY) {
+// Provider selection via environment variables:
+//   LLM_PROVIDER=openai-compatible  requires LLM_BASE_URL + LLM_API_KEY
+//   (default) ANTHROPIC_API_KEY set  → AnthropicProvider
+if (process.env.LLM_PROVIDER === 'openai-compatible') {
+  const llmBaseUrl = process.env.LLM_BASE_URL;
+  const llmApiKey = process.env.LLM_API_KEY;
+  if (!llmBaseUrl || !llmApiKey) {
+    console.error('[goodvibes-acp] WARNING: LLM_PROVIDER=openai-compatible requires LLM_BASE_URL and LLM_API_KEY — LLM provider not registered');
+  } else {
+    const llmName = process.env.LLM_MODEL ? `openai-compatible (${process.env.LLM_MODEL})` : 'openai-compatible';
+    const llmProvider = new OpenAICompatibleProvider({ apiKey: llmApiKey, baseUrl: llmBaseUrl });
+    registry.register('llm-provider', llmProvider);
+    console.error(`[goodvibes-acp] LLM provider registered: ${llmName} @ ${llmBaseUrl}`);
+  }
+} else if (!process.env.ANTHROPIC_API_KEY) {
   console.error('[goodvibes-acp] WARNING: ANTHROPIC_API_KEY not set — LLM provider not registered, agent loops will fail on first call');
 } else {
   const llmProvider = new AnthropicProvider(); // reads ANTHROPIC_API_KEY from .env
