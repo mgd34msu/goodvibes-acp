@@ -174,12 +174,8 @@ AgentsPlugin.register(registry);
 const modelsConfig = config.get<RuntimeConfig['models']>('models');
 const providerManager = new ProviderManager(modelsConfig, registry);
 
-// Pre-seed ANTHROPIC_API_KEY for backward compatibility.
-if (process.env.ANTHROPIC_API_KEY) {
-  providerManager.setApiKey('Anthropic', process.env.ANTHROPIC_API_KEY);
-}
-
 // Activate the default model and register the provider in the registry.
+// API keys are seeded automatically from apiKeyEnv config fields in ProviderManager constructor.
 providerManager.activateDefault();
 // Tool provider registered below after mcpToolProxy is created
 

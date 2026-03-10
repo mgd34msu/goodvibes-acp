@@ -5,10 +5,20 @@
       {
         "type": "anthropic",
         "name": "Anthropic",
+        "apiKeyEnv": "ANTHROPIC_API_KEY",
         "models": [
           { "id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6", "description": "Latest Sonnet \u2014 balanced performance" },
           { "id": "claude-opus-4-6", "name": "Claude Opus 4.6", "description": "Most capable model for complex tasks" },
           { "id": "claude-haiku-4-5-20251001", "name": "Claude Haiku 4.5", "description": "Fastest model for simple tasks" }
+        ]
+      },
+      {
+        "type": "openai-compatible",
+        "name": "InceptionLabs",
+        "baseUrl": "https://api.inceptionlabs.ai/v1",
+        "apiKeyEnv": "INCEPTION_API_KEY",
+        "models": [
+          { "id": "mercury-coder-small-beta", "name": "Mercury Coder Small", "description": "Fast coding model from InceptionLabs" }
         ]
       }
     ]

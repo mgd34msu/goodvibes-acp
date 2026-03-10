@@ -125,6 +125,32 @@ function multiProviderConfig(): RuntimeConfig['models'] {
   };
 }
 
+/** Config with apiKeyEnv specified per provider (simulates Zed multi-server setup) */
+function apiKeyEnvConfig(): RuntimeConfig['models'] {
+  return {
+    default: 'claude-sonnet-4-6',
+    providers: [
+      {
+        type: 'anthropic',
+        name: 'Anthropic',
+        apiKeyEnv: 'ANTHROPIC_API_KEY',
+        models: [
+          { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
+        ],
+      },
+      {
+        type: 'openai-compatible',
+        name: 'InceptionLabs',
+        baseUrl: 'https://api.inceptionlabs.ai/v1',
+        apiKeyEnv: 'INCEPTION_API_KEY',
+        models: [
+          { id: 'mercury-coder-small-beta', name: 'Mercury Coder Small' },
+        ],
+      },
+    ],
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------
@@ -617,6 +643,197 @@ describe('ProviderManager — ANTHROPIC_API_KEY env var fallback', () => {
         process.env.ANTHROPIC_API_KEY = savedEnv;
       } else {
         delete process.env.ANTHROPIC_API_KEY;
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// apiKeyEnv auto-seeding
+// ---------------------------------------------------------------------------
+
+describe('ProviderManager — apiKeyEnv auto-seeding', () => {
+  it('seeds API key from apiKeyEnv on construction for anthropic provider', () => {
+    const savedEnv = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'sk-env-seeded';
+    try {
+      const pm = new ProviderManager(apiKeyEnvConfig(), makeRegistry(), fakeProviderFactory);
+      // Key should be seeded automatically — no explicit setApiKey needed
+      expect(pm.getApiKey('anthropic')).toBe('sk-env-seeded');
+    } finally {
+      if (savedEnv !== undefined) {
+        process.env.ANTHROPIC_API_KEY = savedEnv;
+      } else {
+        delete process.env.ANTHROPIC_API_KEY;
+      }
+    }
+  });
+
+  it('seeds API key from apiKeyEnv on construction for openai-compatible provider', () => {
+    const savedEnv = process.env.INCEPTION_API_KEY;
+    process.env.INCEPTION_API_KEY = 'sk-inception-seeded';
+    try {
+      const pm = new ProviderManager(apiKeyEnvConfig(), makeRegistry(), fakeProviderFactory);
+      expect(pm.getApiKey('inceptionlabs')).toBe('sk-inception-seeded');
+    } finally {
+      if (savedEnv !== undefined) {
+        process.env.INCEPTION_API_KEY = savedEnv;
+      } else {
+        delete process.env.INCEPTION_API_KEY;
+      }
+    }
+  });
+
+  it('does not overwrite an already-set key when seeding from env', () => {
+    const savedEnv = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'sk-from-env';
+    try {
+      const pm = new ProviderManager(apiKeyEnvConfig(), makeRegistry(), fakeProviderFactory);
+      // Override the seeded key
+      pm.setApiKey('Anthropic', 'sk-explicit');
+      expect(pm.getApiKey('anthropic')).toBe('sk-explicit');
+    } finally {
+      if (savedEnv !== undefined) {
+        process.env.ANTHROPIC_API_KEY = savedEnv;
+      } else {
+        delete process.env.ANTHROPIC_API_KEY;
+      }
+    }
+  });
+
+  it('seeded key enables getProvider without explicit setApiKey', () => {
+    const savedEnv = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'sk-seeded-key';
+    try {
+      const pm = new ProviderManager(apiKeyEnvConfig(), makeRegistry(), fakeProviderFactory);
+      const provider = pm.getProvider('claude-sonnet-4-6');
+      expect(provider).toBeDefined();
+      expect(provider!.name).toBe('anthropic');
+    } finally {
+      if (savedEnv !== undefined) {
+        process.env.ANTHROPIC_API_KEY = savedEnv;
+      } else {
+        delete process.env.ANTHROPIC_API_KEY;
+      }
+    }
+  });
+
+  it('seeded inception key enables getProvider for openai-compatible model', () => {
+    const savedAnth = process.env.ANTHROPIC_API_KEY;
+    const savedIncep = process.env.INCEPTION_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    process.env.INCEPTION_API_KEY = 'sk-inception-key';
+    try {
+      const pm = new ProviderManager(apiKeyEnvConfig(), makeRegistry(), fakeProviderFactory);
+      const provider = pm.getProvider('mercury-coder-small-beta');
+      expect(provider).toBeDefined();
+      expect(provider!.name).toBe('InceptionLabs');
+    } finally {
+      if (savedAnth !== undefined) process.env.ANTHROPIC_API_KEY = savedAnth;
+      if (savedIncep !== undefined) {
+        process.env.INCEPTION_API_KEY = savedIncep;
+      } else {
+        delete process.env.INCEPTION_API_KEY;
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// activateDefault: key-based provider fallback
+// ---------------------------------------------------------------------------
+
+describe('ProviderManager — activateDefault() provider key fallback', () => {
+  it('activates mercury model when only INCEPTION_API_KEY is set (no ANTHROPIC_API_KEY)', () => {
+    const savedAnth = process.env.ANTHROPIC_API_KEY;
+    const savedIncep = process.env.INCEPTION_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    process.env.INCEPTION_API_KEY = 'sk-inception-only';
+    try {
+      const registry = makeRegistry();
+      // default is claude-sonnet-4-6 (anthropic) but ANTHROPIC_API_KEY not set
+      const pm = new ProviderManager(apiKeyEnvConfig(), registry, fakeProviderFactory);
+      pm.activateDefault();
+      // Should fall back to mercury model whose provider has a key
+      const provider = registry.getOptional<{ name: string }>('llm-provider');
+      expect(provider).toBeDefined();
+      expect(provider!.name).toBe('InceptionLabs');
+      expect(pm.getActiveModelId()).toBe('mercury-coder-small-beta');
+    } finally {
+      if (savedAnth !== undefined) process.env.ANTHROPIC_API_KEY = savedAnth;
+      if (savedIncep !== undefined) {
+        process.env.INCEPTION_API_KEY = savedIncep;
+      } else {
+        delete process.env.INCEPTION_API_KEY;
+      }
+    }
+  });
+
+  it('activates anthropic model when only ANTHROPIC_API_KEY is set', () => {
+    const savedAnth = process.env.ANTHROPIC_API_KEY;
+    const savedIncep = process.env.INCEPTION_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'sk-anthropic-only';
+    delete process.env.INCEPTION_API_KEY;
+    try {
+      const registry = makeRegistry();
+      const pm = new ProviderManager(apiKeyEnvConfig(), registry, fakeProviderFactory);
+      pm.activateDefault();
+      const provider = registry.getOptional<{ name: string }>('llm-provider');
+      expect(provider).toBeDefined();
+      expect(provider!.name).toBe('anthropic');
+      expect(pm.getActiveModelId()).toBe('claude-sonnet-4-6');
+    } finally {
+      if (savedAnth !== undefined) {
+        process.env.ANTHROPIC_API_KEY = savedAnth;
+      } else {
+        delete process.env.ANTHROPIC_API_KEY;
+      }
+      if (savedIncep !== undefined) process.env.INCEPTION_API_KEY = savedIncep;
+    }
+  });
+
+  it('does not register a provider when no keys are set for any provider', () => {
+    const savedAnth = process.env.ANTHROPIC_API_KEY;
+    const savedIncep = process.env.INCEPTION_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.INCEPTION_API_KEY;
+    try {
+      const registry = makeRegistry();
+      const pm = new ProviderManager(apiKeyEnvConfig(), registry, fakeProviderFactory);
+      pm.activateDefault();
+      // No keys at all — provider should not be registered
+      const provider = registry.getOptional<{ name: string }>('llm-provider');
+      expect(provider).toBeUndefined();
+    } finally {
+      if (savedAnth !== undefined) process.env.ANTHROPIC_API_KEY = savedAnth;
+      if (savedIncep !== undefined) process.env.INCEPTION_API_KEY = savedIncep;
+    }
+  });
+
+  it('multiple providers both have keys — activates default model provider', () => {
+    const savedAnth = process.env.ANTHROPIC_API_KEY;
+    const savedIncep = process.env.INCEPTION_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'sk-anthropic';
+    process.env.INCEPTION_API_KEY = 'sk-inception';
+    try {
+      const registry = makeRegistry();
+      const pm = new ProviderManager(apiKeyEnvConfig(), registry, fakeProviderFactory);
+      pm.activateDefault();
+      // Default is claude-sonnet-4-6, anthropic provider has key — should activate anthropic
+      const provider = registry.getOptional<{ name: string }>('llm-provider');
+      expect(provider).toBeDefined();
+      expect(provider!.name).toBe('anthropic');
+      expect(pm.getActiveModelId()).toBe('claude-sonnet-4-6');
+    } finally {
+      if (savedAnth !== undefined) {
+        process.env.ANTHROPIC_API_KEY = savedAnth;
+      } else {
+        delete process.env.ANTHROPIC_API_KEY;
+      }
+      if (savedIncep !== undefined) {
+        process.env.INCEPTION_API_KEY = savedIncep;
+      } else {
+        delete process.env.INCEPTION_API_KEY;
       }
     }
   });

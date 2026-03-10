@@ -69,6 +69,8 @@ export type RuntimeConfig = {
       name: string;
       /** Base URL for the API endpoint (required for openai-compatible) */
       baseUrl?: string;
+      /** Environment variable name that holds the API key for this provider (e.g., 'ANTHROPIC_API_KEY', 'INCEPTION_API_KEY') */
+      apiKeyEnv?: string;
       /** Available models from this provider */
       models: Array<{
         /** Model ID used in API calls */

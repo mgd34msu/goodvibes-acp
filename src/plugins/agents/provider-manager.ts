@@ -83,6 +83,36 @@ export class ProviderManager {
     this._registry = registry;
     this._activeModelId = modelsConfig?.default ?? DEFAULT_MODEL_ID;
     this._providerFactory = providerFactory;
+    this._seedApiKeysFromEnv();
+  }
+
+  // -------------------------------------------------------------------------
+  // Private: env-var seeding
+  // -------------------------------------------------------------------------
+
+  /**
+   * Iterate all configured providers and, for each one with an `apiKeyEnv` field,
+   * read that env var and pre-seed the API key (unless one has already been set
+   * via `setApiKey`).
+   *
+   * Called once in the constructor so every provider whose env var is present
+   * at startup is immediately usable without an explicit `setApiKey` call.
+   */
+  private _seedApiKeysFromEnv(): void {
+    if (!this._config?.providers?.length) return;
+    for (const provider of this._config.providers) {
+      if (!provider.apiKeyEnv) continue;
+      const key = provider.name.toLowerCase();
+      // Only seed when no explicit key has already been set
+      if (this._apiKeys.has(key)) continue;
+      const envValue = process.env[provider.apiKeyEnv];
+      if (envValue) {
+        this._apiKeys.set(key, envValue);
+        console.error(
+          `[ProviderManager] Seeded API key for provider '${provider.name}' from env var '${provider.apiKeyEnv}'.`,
+        );
+      }
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -197,12 +227,21 @@ export class ProviderManager {
     if (this._config?.providers?.length) {
       const activated = this.setActiveModel(this._activeModelId);
       if (!activated) {
-        // Default model not found — try the first configured model
-        const first = this._config.providers[0]?.models[0];
-        if (first) {
-          this.setActiveModel(first.id);
+        // Default model not found OR its provider has no key — find first provider with a key
+        const fallbackModel = this._findFirstModelWithKey();
+        if (fallbackModel) {
+          console.error(
+            `[ProviderManager] activateDefault: default model '${this._activeModelId}' unavailable — falling back to '${fallbackModel}'.`,
+          );
+          this.setActiveModel(fallbackModel);
         } else {
-          console.error('[ProviderManager] activateDefault: no models configured');
+          // No provider has a key; try the first configured model anyway (legacy behavior)
+          const first = this._config.providers[0]?.models[0];
+          if (first) {
+            this.setActiveModel(first.id);
+          } else {
+            console.error('[ProviderManager] activateDefault: no models configured');
+          }
         }
       }
       return;
@@ -226,6 +265,31 @@ export class ProviderManager {
   // -------------------------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------------------------
+
+  /**
+   * Find the first model ID whose provider has an available API key
+   * (either in _apiKeys or via apiKeyEnv / legacy ANTHROPIC_API_KEY).
+   * Returns undefined when no provider has a key.
+   */
+  private _findFirstModelWithKey(): string | undefined {
+    if (!this._config?.providers) return undefined;
+    for (const provider of this._config.providers) {
+      const key = provider.name.toLowerCase();
+      if (this._apiKeys.has(key)) {
+        return provider.models[0]?.id;
+      }
+      // Check env var: prefer apiKeyEnv, fall back to legacy ANTHROPIC_API_KEY for anthropic
+      const envVar = provider.apiKeyEnv
+        ? process.env[provider.apiKeyEnv]
+        : provider.type === 'anthropic'
+          ? process.env.ANTHROPIC_API_KEY
+          : undefined;
+      if (envVar) {
+        return provider.models[0]?.id;
+      }
+    }
+    return undefined;
+  }
 
   /**
    * Find the provider config entry that contains the given modelId.
@@ -257,12 +321,15 @@ export class ProviderManager {
     let provider: ILLMProvider | null = null;
 
     if (providerConfig.type === 'anthropic') {
-      const apiKey =
-        this._apiKeys.get(key) ??
-        process.env.ANTHROPIC_API_KEY;
+      // Prefer explicit key, then apiKeyEnv env var, then legacy ANTHROPIC_API_KEY fallback
+      const envFallback = providerConfig.apiKeyEnv
+        ? process.env[providerConfig.apiKeyEnv]
+        : process.env.ANTHROPIC_API_KEY;
+      const apiKey = this._apiKeys.get(key) ?? envFallback;
       if (!apiKey) {
+        const envHint = providerConfig.apiKeyEnv ?? 'ANTHROPIC_API_KEY';
         console.error(
-          `[ProviderManager] No API key for provider '${providerConfig.name}'. Set ANTHROPIC_API_KEY or call setApiKey().`,
+          `[ProviderManager] No API key for provider '${providerConfig.name}'. Set ${envHint} or call setApiKey().`,
         );
         return null;
       }
@@ -270,10 +337,13 @@ export class ProviderManager {
         ? (this._providerFactory('anthropic', { apiKey }) ?? null)
         : new AnthropicProvider(apiKey);
     } else if (providerConfig.type === 'openai-compatible') {
-      const apiKey = this._apiKeys.get(key);
+      // Prefer explicit key, then apiKeyEnv env var
+      const envFallback = providerConfig.apiKeyEnv ? process.env[providerConfig.apiKeyEnv] : undefined;
+      const apiKey = this._apiKeys.get(key) ?? envFallback;
       if (!apiKey) {
+        const envHint = providerConfig.apiKeyEnv ? ` Set ${providerConfig.apiKeyEnv} or call` : ' Call';
         console.error(
-          `[ProviderManager] No API key for provider '${providerConfig.name}'. Call setApiKey() before activation.`,
+          `[ProviderManager] No API key for provider '${providerConfig.name}'.${envHint} setApiKey() before activation.`,
         );
         return null;
       }
