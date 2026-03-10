@@ -144,7 +144,7 @@ function apiKeyEnvConfig(): RuntimeConfig['models'] {
         baseUrl: 'https://api.inceptionlabs.ai/v1',
         apiKeyEnv: 'INCEPTION_API_KEY',
         models: [
-          { id: 'mercury-coder-small-beta', name: 'Mercury Coder Small' },
+          { id: 'mercury-2', name: 'Mercury Coder Small' },
         ],
       },
     ],
@@ -725,7 +725,7 @@ describe('ProviderManager — apiKeyEnv auto-seeding', () => {
     process.env.INCEPTION_API_KEY = 'sk-inception-key';
     try {
       const pm = new ProviderManager(apiKeyEnvConfig(), makeRegistry(), fakeProviderFactory);
-      const provider = pm.getProvider('mercury-coder-small-beta');
+      const provider = pm.getProvider('mercury-2');
       expect(provider).toBeDefined();
       expect(provider!.name).toBe('InceptionLabs');
     } finally {
@@ -758,7 +758,7 @@ describe('ProviderManager — activateDefault() provider key fallback', () => {
       const provider = registry.getOptional<{ name: string }>('llm-provider');
       expect(provider).toBeDefined();
       expect(provider!.name).toBe('InceptionLabs');
-      expect(pm.getActiveModelId()).toBe('mercury-coder-small-beta');
+      expect(pm.getActiveModelId()).toBe('mercury-2');
     } finally {
       if (savedAnth !== undefined) process.env.ANTHROPIC_API_KEY = savedAnth;
       if (savedIncep !== undefined) {

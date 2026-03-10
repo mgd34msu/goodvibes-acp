@@ -18,7 +18,7 @@
         "baseUrl": "https://api.inceptionlabs.ai/v1",
         "apiKeyEnv": "INCEPTION_API_KEY",
         "models": [
-          { "id": "mercury-coder-small-beta", "name": "Mercury Coder Small", "description": "Fast coding model from InceptionLabs" }
+          { "id": "mercury-2", "name": "Mercury 2", "description": "Fastest reasoning LLM — 128K context, tool calling, structured outputs" }
         ]
       }
     ]
