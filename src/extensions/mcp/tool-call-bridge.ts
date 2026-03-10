@@ -15,6 +15,30 @@
 import { randomUUID } from 'node:crypto';
 import type { ToolCallEmitter } from '../acp/tool-call-emitter.js';
 import type { AgentProgressEvent } from '../../types/agent.js';
+import type { McpCallResult } from './transport.js';
+
+// ---------------------------------------------------------------------------
+// PermissionGate
+// ---------------------------------------------------------------------------
+
+/**
+ * Permission gate interface for tools with side effects.
+ *
+ * Implement this interface and inject it into McpToolCallBridge to gate
+ * destructive or sensitive tool calls between the 'pending' and 'in_progress'
+ * ACP lifecycle states.
+ */
+export interface PermissionGate {
+  /**
+   * Request permission to run a tool.
+   *
+   * @param sessionId - ACP session ID
+   * @param toolCallId - Stable ID for the pending tool call
+   * @param toolName   - MCP tool name (may be namespaced)
+   * @returns Promise resolving to true (granted) or false (denied)
+   */
+  requestPermission(sessionId: string, toolCallId: string, toolName: string): Promise<boolean>;
+}
 
 // ---------------------------------------------------------------------------
 // McpToolCallBridge
@@ -50,7 +74,10 @@ import type { AgentProgressEvent } from '../../types/agent.js';
  *   to align with the SDK, no code change will be needed.
  */
 export class McpToolCallBridge {
-  constructor(private readonly _getEmitter: (sessionId: string) => ToolCallEmitter | null) {}
+  constructor(
+    private readonly _getEmitter: (sessionId: string) => ToolCallEmitter | null,
+    private readonly _permissionGate?: PermissionGate,
+  ) {}
 
   // -------------------------------------------------------------------------
   // makeProgressHandler
@@ -97,15 +124,25 @@ export class McpToolCallBridge {
             inferKind(event.toolName),
             { '_goodvibes/turn': event.turn },
           )
-          .then(() => {
-            // TODO(ISS-024): Permission gate — between pending and in_progress, check if
-            // this tool requires user approval (e.g. file writes, shell commands). When
-            // ISS-018 (PermissionGate wiring) is resolved, call:
-            //   const { granted } = await connection.requestPermission({ sessionId,
-            //     permission: { type: inferPermissionType(event.toolName),
-            //                   title: title, description: JSON.stringify(event.input) } })
-            //   if (!granted) { emitToolCallUpdate(sessionId, toolCallId, 'failed',
-            //     undefined, [{ type:'content', content:{ type:'text', text:'Permission denied' } }]) }
+          .then(async () => {
+            // ISS-021: Permission gate — for tools with side effects, check permission
+            // before transitioning from 'pending' to 'in_progress'.
+            if (this._permissionGate && requiresPermission(event.toolName)) {
+              const granted = await this._permissionGate.requestPermission(
+                sessionId,
+                toolCallId,
+                event.toolName,
+              );
+              if (!granted) {
+                return emitter.emitToolCallUpdate(
+                  sessionId,
+                  toolCallId,
+                  'failed',
+                  undefined,
+                  [{ type: 'content', content: { type: 'text', text: 'Permission denied' } }],
+                );
+              }
+            }
             return emitter.emitToolCallUpdate(sessionId, toolCallId, 'in_progress');
           })
           .catch((err: unknown) => {
@@ -126,14 +163,26 @@ export class McpToolCallBridge {
             toolCallId,
             'completed',
             { '_goodvibes/durationMs': event.durationMs },
-            // Forward actual MCP tool result content to the ACP client (ISS-005/ISS-105).
-            // Converts the tool result data to a text content block for ACP visibility.
+            // ISS-022: Forward MCP content blocks directly to ACP client.
+            // event.result.data is a McpCallResult with a content[] array.
+            // Map each MCP content block to an ACP ToolCallContent block.
             event.result != null
-              ? [{ type: 'content', content: { type: 'text', text: typeof event.result.data === 'string' ? event.result.data : JSON.stringify(event.result.data ?? '') } }]
+              ? _mcpResultToAcpContent(event.result.data as McpCallResult | null | undefined)
               : [],
           )
           .catch((err: unknown) => {
             console.error('[McpToolCallBridge] error:', err);
+          });
+        return;
+      }
+
+      if (event.type === 'agent_thought_chunk') {
+        // Forward agent thinking/reasoning as ACP agent_thought_chunk session update.
+        // Fire-and-forget: thought chunks are best-effort — do not block the loop.
+        emitter
+          .emitThoughtChunk(sessionId, event.chunk.text)
+          .catch((err: unknown) => {
+            console.error('[McpToolCallBridge] agent_thought_chunk emit error:', err);
           });
         return;
       }
@@ -165,6 +214,53 @@ export class McpToolCallBridge {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Determine if a tool requires permission before execution.
+ *
+ * Tools with side effects (write, edit, delete, exec, create, remove)
+ * must pass through the permission gate before transitioning to in_progress.
+ *
+ * @param toolName - MCP tool name (may be namespaced)
+ */
+export function requiresPermission(toolName: string): boolean {
+  // Use the raw tool name part (after last '__') for keyword matching.
+  const raw = toolName.includes('__') ? toolName.split('__').pop()! : toolName;
+  const n = raw.toLowerCase();
+  return (
+    n.includes('write') ||
+    n.includes('edit') ||
+    n.includes('delete') ||
+    n.includes('exec') ||
+    n.includes('create') ||
+    n.includes('remove')
+  );
+}
+
+/**
+ * Convert an MCP call result's content blocks to ACP ToolCallContent[].
+ *
+ * ISS-022: Forward MCP ContentBlock[] directly rather than re-wrapping
+ * into a single text block. Preserves multi-block results and non-text
+ * content types (image, resource, etc.).
+ *
+ * @param mcpResult - Raw McpCallResult or nullish
+ */
+function _mcpResultToAcpContent(
+  mcpResult: McpCallResult | null | undefined,
+): import('@agentclientprotocol/sdk').ToolCallContent[] {
+  if (!mcpResult || !Array.isArray(mcpResult.content) || mcpResult.content.length === 0) {
+    return [];
+  }
+  // MCP ContentBlock[] is structurally compatible with ACP ToolCallContent[].
+  // We use a cast here because McpCallResult uses a minimal open type
+  // ({ type: string; text?: string; [key: string]: unknown }) rather than
+  // the full ACP ContentBlock union.
+  return mcpResult.content.map((block) => ({
+    type: 'content' as const,
+    content: block as import('@agentclientprotocol/sdk').ContentBlock,
+  }));
+}
 
 /**
  * Infer an ACP ToolCallKind from an MCP tool name.

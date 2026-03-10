@@ -72,6 +72,15 @@ export class WRFCHandlers {
     if (this._subscriptions.length > 0) return;
 
     this._subscriptions = [
+      this.eventBus.on('wrfc:state-changed', (event) => {
+        const p = event.payload;
+        if (!p || typeof p !== 'object' || !('workId' in p) || !('sessionId' in p)) {
+          console.error('[WRFCHandlers] Malformed wrfc:state-changed payload', p);
+          return;
+        }
+        this._onStateChanged(p as { workId: string; sessionId: string; from: string; to: string; attempt: number });
+      }),
+
       this.eventBus.on('wrfc:work-complete', (event) => {
         const p = event.payload;
         if (!p || typeof p !== 'object' || !('workId' in p) || !('sessionId' in p)) {
@@ -243,6 +252,18 @@ export class WRFCHandlers {
     this.directiveQueue.enqueue(directive);
   }
 
+  private _onStateChanged(payload: { workId: string; sessionId: string; from: string; to: string; attempt: number }): void {
+    const { workId, sessionId, from, to, attempt } = payload;
+    this.eventBus.emit('wrfc:phase-changed', {
+      workId,
+      sessionId,
+      from,
+      to,
+      attempt,
+      timestamp: Date.now(),
+    });
+  }
+
   private _onCancelled(payload: { workId: string; sessionId: string }): void {
     const { workId, sessionId } = payload;
 
@@ -256,10 +277,10 @@ export class WRFCHandlers {
 
     const directive: Directive = {
       id: crypto.randomUUID(),
-      action: 'cancel',
+      action: 'escalate',
       workId,
       sessionId,
-      priority: 'normal',
+      priority: 'high',
       createdAt: Date.now(),
       meta: { sessionId, reason: 'cancelled' },
     };

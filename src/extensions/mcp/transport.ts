@@ -3,8 +3,8 @@
  * @layer L2 — MCP transport helpers
  *
  * Provides factory helpers for creating MCP client connections to MCP servers.
- * Implements a minimal JSON-RPC client over stdio (subprocess) without
- * requiring @modelcontextprotocol/sdk.
+ * Implements a minimal JSON-RPC client over stdio (subprocess) and over HTTP POST,
+ * without requiring @modelcontextprotocol/sdk.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -283,6 +283,175 @@ export type McpStdioTransportOptions = {
   /** Additional environment variables for the subprocess */
   env?: Record<string, string>;
 };
+
+// ---------------------------------------------------------------------------
+// McpHttpClient
+// ---------------------------------------------------------------------------
+
+/** Options for connecting to an MCP server over HTTP */
+export type McpHttpTransportOptions = {
+  /** Logical name for this server (used in logging) */
+  name: string;
+  /** HTTP endpoint URL of the MCP server */
+  url: string;
+  /** HTTP headers to include in all requests */
+  headers?: Record<string, string>;
+};
+
+/**
+ * MCP JSON-RPC client over HTTP POST (Streamable HTTP / JSON-RPC 2.0).
+ *
+ * Each MCP request is sent as an HTTP POST with `Content-Type: application/json`.
+ * The response body is parsed as a JSON-RPC 2.0 response.
+ *
+ * This client implements the same public API as McpClient so the McpBridge
+ * can treat both interchangeably.
+ */
+export class McpHttpClient extends EventEmitter {
+  private _idCounter = 0;
+  private _ready = false;
+  private _closed = false;
+  private _serverCapabilities: Record<string, unknown> | undefined = undefined;
+
+  constructor(private readonly _options: McpHttpTransportOptions) {
+    super();
+  }
+
+  // -------------------------------------------------------------------------
+  // Public API (mirrors McpClient)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Perform the MCP initialization handshake over HTTP.
+   * Must be called before listing or calling tools.
+   */
+  async initialize(): Promise<void> {
+    const result = await this._request('initialize', {
+      protocolVersion: '2024-11-05',
+      capabilities: { tools: {} },
+      clientInfo: { name: 'goodvibes', version: '0.1.0' },
+    }) as { capabilities?: Record<string, unknown> };
+    this._serverCapabilities = result.capabilities;
+    this._ready = true;
+  }
+
+  /** Server capabilities returned during the initialize handshake */
+  get serverCapabilities(): Record<string, unknown> | undefined {
+    return this._serverCapabilities;
+  }
+
+  /**
+   * List all tools exposed by this MCP server.
+   */
+  async listTools(): Promise<McpToolDef[]> {
+    this._assertReady();
+    const result = await this._request('tools/list', {}) as { tools?: McpToolDef[] };
+    return result.tools ?? [];
+  }
+
+  /**
+   * Call a named tool with the given arguments.
+   */
+  async callTool(name: string, args: unknown): Promise<McpCallResult> {
+    this._assertReady();
+    const result = await this._request('tools/call', {
+      name,
+      arguments: args,
+    }) as McpCallResult;
+    return result;
+  }
+
+  /**
+   * Close the HTTP client (no-op for HTTP — marks as closed to reject new requests).
+   */
+  close(): void {
+    this._closed = true;
+    this.emit('exit', 0);
+  }
+
+  get isReady(): boolean {
+    return this._ready && !this._closed;
+  }
+
+  // -------------------------------------------------------------------------
+  // Private helpers
+  // -------------------------------------------------------------------------
+
+  private async _request(
+    method: string,
+    params: unknown,
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
+  ): Promise<unknown> {
+    if (this._closed) {
+      throw new Error('McpHttpClient is closed');
+    }
+
+    const id = ++this._idCounter;
+    const body: JsonRpcRequest = { jsonrpc: '2.0', id, method, params };
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    let response: Response;
+    try {
+      response = await fetch(this._options.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          ...this._options.headers,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`[McpHttpClient:${this._options.name}] HTTP request failed: ${msg}`);
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        `[McpHttpClient:${this._options.name}] HTTP ${response.status} ${response.statusText} for method "${method}"`,
+      );
+    }
+
+    let rpc: JsonRpcResponse;
+    try {
+      rpc = (await response.json()) as JsonRpcResponse;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`[McpHttpClient:${this._options.name}] Invalid JSON response: ${msg}`);
+    }
+
+    if (rpc.error) {
+      throw new Error(
+        `[McpHttpClient:${this._options.name}] MCP error ${rpc.error.code}: ${rpc.error.message}`,
+      );
+    }
+
+    return rpc.result;
+  }
+
+  private _assertReady(): void {
+    if (!this._ready) throw new Error('McpHttpClient not initialized — call initialize() first');
+    if (this._closed) throw new Error('McpHttpClient is closed');
+  }
+}
+
+/**
+ * Create an MCP client that connects to a remote HTTP MCP server.
+ *
+ * The client is NOT yet initialized — call `client.initialize()` after creation.
+ *
+ * @param options - Connection options including URL and headers
+ * @returns An McpHttpClient ready to be initialized
+ */
+export function createMcpHttpTransport(options: McpHttpTransportOptions): McpHttpClient {
+  return new McpHttpClient(options);
+}
 
 /**
  * Spawn an MCP server as a subprocess and return a connected McpClient.

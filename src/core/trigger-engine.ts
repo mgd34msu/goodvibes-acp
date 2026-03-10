@@ -9,6 +9,7 @@ import type { EventBus, EventRecord, Disposable } from './event-bus.js';
 import type { Registry } from './registry.js';
 import type { TriggerDefinition, TriggerContext } from '../types/trigger.js';
 import type { ITriggerHandler } from '../types/registry.js';
+import { DEFAULT_TRIGGER_TIMEOUT_MS } from '../types/constants.js';
 
 /**
  * L1 extension of TriggerDefinition: adds a runtime condition function that
@@ -224,16 +225,18 @@ export class TriggerEngine {
         fireCount: state.fireCount,
       };
 
-      handler.execute(definition, context).catch((err: unknown) => {
+      const timeoutMs = definition.timeout ?? DEFAULT_TRIGGER_TIMEOUT_MS;
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`Trigger '${definition.id}' timed out after ${timeoutMs}ms`)), timeoutMs)
+      );
+
+      Promise.race([handler.execute(definition, context), timeoutPromise]).catch((err: unknown) => {
         // Emit error to bus but don't crash the engine
-        // Custom fields go in _meta per KB-08 extensibility rules (no root-level custom fields)
         this._eventBus.emit('error', {
-          _meta: {
-            '_goodvibes/source': 'trigger-engine',
-            '_goodvibes/triggerId': definition.id,
-            '_goodvibes/error': err instanceof Error ? err.message : String(err),
-            '_goodvibes/timestamp': Date.now(),
-          },
+          source: 'trigger-engine',
+          triggerId: definition.id,
+          error: err instanceof Error ? err.message : String(err),
+          timestamp: Date.now(),
         });
       });
     }

@@ -20,7 +20,7 @@ import { AgentTracker } from './tracker.js';
 const DEFAULT_MAX_PARALLEL = 6;
 
 /** Registry key used to look up the L3 IAgentSpawner implementation. */
-const AGENT_SPAWNER_KEY = 'agent_spawner';
+const AGENT_SPAWNER_KEY = 'agent-spawner';
 
 /** Options accepted by the AgentCoordinator constructor. */
 export interface AgentCoordinatorOptions {

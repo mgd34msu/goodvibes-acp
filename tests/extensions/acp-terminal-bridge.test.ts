@@ -31,69 +31,69 @@ describe('AcpTerminal (no capabilities — direct spawn fallback)', () => {
   });
 
   test('create returns a TerminalHandle with id, command, createdAt', async () => {
-    const handle = await terminal.create('echo', ['hello']);
+    const handle = await terminal.create({ command: 'echo', args: ['hello'] });
     expect(handle.id).toMatch(/^term-\d+$/);
-    expect(handle.command).toBe('echo hello');
+    expect(handle.command).toBe('echo');
     expect(typeof handle.createdAt).toBe('number');
     expect(handle.createdAt).toBeGreaterThan(0);
     await terminal.waitForExit(handle);
   });
 
   test('create with no args uses just the command', async () => {
-    const handle = await terminal.create('true');
+    const handle = await terminal.create({ command: 'true' });
     expect(handle.command).toBe('true');
     await terminal.waitForExit(handle);
   });
 
   test('each create call produces a unique handle id', async () => {
-    const h1 = await terminal.create('true');
-    const h2 = await terminal.create('true');
+    const h1 = await terminal.create({ command: 'true' });
+    const h2 = await terminal.create({ command: 'true' });
     expect(h1.id).not.toBe(h2.id);
     await Promise.all([terminal.waitForExit(h1), terminal.waitForExit(h2)]);
   });
 
   test('waitForExit returns exitCode 0 for successful command', async () => {
-    const handle = await terminal.create('true');
+    const handle = await terminal.create({ command: 'true' });
     const result = await terminal.waitForExit(handle);
     expect(result.exitCode).toBe(0);
   });
 
   test('waitForExit returns non-zero exitCode for failing command', async () => {
-    const handle = await terminal.create('false');
+    const handle = await terminal.create({ command: 'false' });
     const result = await terminal.waitForExit(handle);
     expect(result.exitCode).not.toBe(0);
   });
 
   test('waitForExit captures stdout from echo', async () => {
-    const handle = await terminal.create('echo', ['hello from test']);
+    const handle = await terminal.create({ command: 'echo', args: ['hello from test'] });
     const result = await terminal.waitForExit(handle);
     expect(result.stdout).toContain('hello from test');
   });
 
   test('waitForExit returns durationMs greater than or equal to 0', async () => {
-    const handle = await terminal.create('true');
+    const handle = await terminal.create({ command: 'true' });
     const result = await terminal.waitForExit(handle);
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
   });
 
   test('output returns captured stdout before exit', async () => {
-    const handle = await terminal.create('echo', ['buffered output']);
+    const handle = await terminal.create({ command: 'echo', args: ['buffered output'] });
     // Wait for the process to complete so stdout is buffered
     await terminal.waitForExit(handle);
     const out = await terminal.output(handle);
-    expect(out).toContain('buffered output');
+    expect(out.output).toContain('buffered output');
   });
 
   test('kill terminates a running process without throwing', async () => {
     // sleep for a long time — we will kill it
-    const handle = await terminal.create('sleep', ['10']);
+    const handle = await terminal.create({ command: 'sleep', args: ['10'] });
     await expect(terminal.kill(handle)).resolves.toBeUndefined();
     // Allow process to clean up
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
   });
 
   test('release removes the handle (subsequent waitForExit throws)', async () => {
-    const handle = await terminal.create('true');
+    const handle = await terminal.create({ command: 'true' });
     await terminal.waitForExit(handle);
     await terminal.release(handle);
     // After release, the handle is gone
@@ -103,7 +103,7 @@ describe('AcpTerminal (no capabilities — direct spawn fallback)', () => {
   });
 
   test('release on running process kills it without throwing', async () => {
-    const handle = await terminal.create('sleep', ['10']);
+    const handle = await terminal.create({ command: 'sleep', args: ['10'] });
     await expect(terminal.release(handle)).resolves.toBeUndefined();
   });
 
@@ -115,7 +115,7 @@ describe('AcpTerminal (no capabilities — direct spawn fallback)', () => {
   });
 
   test('waitForExit resolves immediately if process already exited', async () => {
-    const handle = await terminal.create('true');
+    const handle = await terminal.create({ command: 'true' });
     // Give process time to exit on its own
     await new Promise<void>((resolve) => setTimeout(resolve, 100));
     // Should resolve immediately since exitCode is already set

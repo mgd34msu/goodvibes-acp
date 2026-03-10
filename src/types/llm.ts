@@ -77,6 +77,7 @@ export type ChatResponse = {
 /** A chunk from a streaming chat response */
 export type ChatChunk =
   | { type: 'text_delta'; text: string }
+  | { type: 'thinking_delta'; thinking: string }
   | { type: 'tool_use_start'; id: string; name: string }
   | { type: 'tool_use_delta'; input_json: string }
   | { type: 'stop'; stopReason: StopReason; usage: { inputTokens: number; outputTokens: number } };

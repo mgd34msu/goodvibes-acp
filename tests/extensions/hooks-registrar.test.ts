@@ -163,7 +163,9 @@ describe('HookRegistrar', () => {
 
     // Missing task and sessionId
     const ctx = await engine.execute('agent:spawn', { type: 'engineer' } as Record<string, unknown>);
-    expect((ctx as Record<string, unknown>)._validationError).toContain('task');
+    const meta = ((ctx as Record<string, unknown>)._meta) as Record<string, unknown> | undefined;
+    expect(typeof meta?.['_goodvibes/validationError']).toBe('string');
+    expect(meta?.['_goodvibes/validationError'] as string).toContain('task');
   });
 
   it('agent:spawn pre-hook returns unchanged context when all required fields are present', async () => {

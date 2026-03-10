@@ -13,7 +13,8 @@
  *   - _formatToolTitle: 3-part, 2-part, plain name
  */
 import { describe, test, expect } from 'bun:test';
-import { McpToolCallBridge } from '../../src/extensions/mcp/tool-call-bridge.ts';
+import { McpToolCallBridge, requiresPermission } from '../../src/extensions/mcp/tool-call-bridge.ts';
+import type { PermissionGate } from '../../src/extensions/mcp/tool-call-bridge.ts';
 import type { ToolCallEmitter } from '../../src/extensions/acp/tool-call-emitter.ts';
 
 // ---------------------------------------------------------------------------
@@ -577,5 +578,268 @@ describe('McpToolCallBridge', () => {
         expect(allCompleted[1].toolCallId).toBe(id2);
       });
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ISS-021: requiresPermission
+// ---------------------------------------------------------------------------
+
+describe('requiresPermission', () => {
+  test('returns true for write tool', () => {
+    expect(requiresPermission('mcp__fs__write_file')).toBe(true);
+  });
+
+  test('returns true for edit tool', () => {
+    expect(requiresPermission('mcp__precision__precision_edit')).toBe(true);
+  });
+
+  test('returns true for delete tool', () => {
+    expect(requiresPermission('mcp__fs__delete_file')).toBe(true);
+  });
+
+  test('returns true for exec tool', () => {
+    expect(requiresPermission('mcp__sh__exec_command')).toBe(true);
+  });
+
+  test('returns true for create tool', () => {
+    expect(requiresPermission('mcp__fs__create_dir')).toBe(true);
+  });
+
+  test('returns true for remove tool', () => {
+    expect(requiresPermission('mcp__fs__remove_file')).toBe(true);
+  });
+
+  test('returns false for read tool', () => {
+    expect(requiresPermission('mcp__fs__read_file')).toBe(false);
+  });
+
+  test('returns false for search tool', () => {
+    expect(requiresPermission('mcp__precision__glob')).toBe(false);
+  });
+
+  test('returns false for fetch tool', () => {
+    expect(requiresPermission('mcp__web__fetch')).toBe(false);
+  });
+
+  test('returns false for unknown tool', () => {
+    expect(requiresPermission('mcp__svc__frobnicate')).toBe(false);
+  });
+
+  test('handles non-namespaced tool names', () => {
+    expect(requiresPermission('write_file')).toBe(true);
+    expect(requiresPermission('read_file')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ISS-021: PermissionGate integration
+// ---------------------------------------------------------------------------
+
+describe('PermissionGate integration', () => {
+  function makeGate(grants: boolean): { gate: PermissionGate; calls: Array<{ sessionId: string; toolCallId: string; toolName: string }> } {
+    const calls: Array<{ sessionId: string; toolCallId: string; toolName: string }> = [];
+    const gate: PermissionGate = {
+      async requestPermission(sessionId, toolCallId, toolName) {
+        calls.push({ sessionId, toolCallId, toolName });
+        return grants;
+      },
+    };
+    return { gate, calls };
+  }
+
+  test('denied: emits failed with Permission denied content (not in_progress)', async () => {
+    const { emitter, calls } = makeEmitter();
+    const { gate } = makeGate(false);
+    const bridge = new McpToolCallBridge(() => emitter, gate);
+    const handler = bridge.makeProgressHandler(SESSION_ID);
+
+    handler({ type: 'tool_start', turn: 1, toolName: 'mcp__fs__write_file' });
+    await settle();
+
+    const updates = calls.filter((c) => c.method === 'emitToolCallUpdate') as Extract<EmitterCall, { method: 'emitToolCallUpdate' }>[];
+    expect(updates).toHaveLength(1);
+    expect(updates[0].status).toBe('failed');
+    const contentBlock = updates[0].content?.[0] as { type: string; content: { type: string; text: string } } | undefined;
+    expect(contentBlock?.content?.text).toBe('Permission denied');
+    // Must NOT emit in_progress
+    expect(updates.some((u) => u.status === 'in_progress')).toBe(false);
+  });
+
+  test('granted: proceeds to in_progress after permission check', async () => {
+    const { emitter, calls } = makeEmitter();
+    const { gate, calls: gateCalls } = makeGate(true);
+    const bridge = new McpToolCallBridge(() => emitter, gate);
+    const handler = bridge.makeProgressHandler(SESSION_ID);
+
+    handler({ type: 'tool_start', turn: 1, toolName: 'mcp__fs__write_file' });
+    await settle();
+
+    expect(gateCalls).toHaveLength(1);
+    expect(gateCalls[0].toolName).toBe('mcp__fs__write_file');
+
+    const updates = calls.filter((c) => c.method === 'emitToolCallUpdate') as Extract<EmitterCall, { method: 'emitToolCallUpdate' }>[];
+    expect(updates).toHaveLength(1);
+    expect(updates[0].status).toBe('in_progress');
+  });
+
+  test('safe tool (read) skips gate and proceeds to in_progress', async () => {
+    const { emitter, calls } = makeEmitter();
+    const { gate, calls: gateCalls } = makeGate(false); // would deny if called
+    const bridge = new McpToolCallBridge(() => emitter, gate);
+    const handler = bridge.makeProgressHandler(SESSION_ID);
+
+    handler({ type: 'tool_start', turn: 1, toolName: 'mcp__fs__read_file' });
+    await settle();
+
+    // Gate should NOT be called for read tools
+    expect(gateCalls).toHaveLength(0);
+
+    const updates = calls.filter((c) => c.method === 'emitToolCallUpdate') as Extract<EmitterCall, { method: 'emitToolCallUpdate' }>[];
+    expect(updates).toHaveLength(1);
+    expect(updates[0].status).toBe('in_progress');
+  });
+
+  test('no gate (undefined): all tools proceed to in_progress', async () => {
+    const { emitter, calls } = makeEmitter();
+    const bridge = new McpToolCallBridge(() => emitter); // no gate
+    const handler = bridge.makeProgressHandler(SESSION_ID);
+
+    handler({ type: 'tool_start', turn: 1, toolName: 'mcp__fs__write_file' });
+    await settle();
+
+    const updates = calls.filter((c) => c.method === 'emitToolCallUpdate') as Extract<EmitterCall, { method: 'emitToolCallUpdate' }>[];
+    expect(updates).toHaveLength(1);
+    expect(updates[0].status).toBe('in_progress');
+  });
+
+  test('gate receives correct sessionId and toolCallId', async () => {
+    const { emitter } = makeEmitter();
+    const { gate, calls: gateCalls } = makeGate(true);
+    const bridge = new McpToolCallBridge(() => emitter, gate);
+    const handler = bridge.makeProgressHandler('my-session-id');
+
+    handler({ type: 'tool_start', turn: 1, toolName: 'mcp__fs__delete_file' });
+    await settle();
+
+    expect(gateCalls).toHaveLength(1);
+    expect(gateCalls[0].sessionId).toBe('my-session-id');
+    expect(typeof gateCalls[0].toolCallId).toBe('string');
+    expect(gateCalls[0].toolCallId.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ISS-022: MCP content block forwarding on tool_complete
+// ---------------------------------------------------------------------------
+
+describe('ISS-022: content block forwarding', () => {
+  test('tool_complete with multi-block McpCallResult forwards all blocks', async () => {
+    const { emitter, calls } = makeEmitter();
+    const bridge = new McpToolCallBridge(() => emitter);
+    const handler = bridge.makeProgressHandler(SESSION_ID);
+
+    const mcpResult = {
+      content: [
+        { type: 'text', text: 'line one' },
+        { type: 'text', text: 'line two' },
+      ],
+      isError: false,
+    };
+
+    handler({ type: 'tool_start', turn: 1, toolName: 'mcp__fs__read_file' });
+    await settle();
+    handler({ type: 'tool_complete', turn: 1, toolName: 'mcp__fs__read_file', durationMs: 10, result: { data: mcpResult } });
+    await settle();
+
+    const updates = calls.filter((c) => c.method === 'emitToolCallUpdate') as Extract<EmitterCall, { method: 'emitToolCallUpdate' }>[];
+    const completed = updates.find((u) => u.status === 'completed')!;
+    expect(completed.content).toHaveLength(2);
+    const block0 = completed.content?.[0] as { type: string; content: { type: string; text: string } };
+    const block1 = completed.content?.[1] as { type: string; content: { type: string; text: string } };
+    expect(block0.type).toBe('content');
+    expect(block0.content.text).toBe('line one');
+    expect(block1.content.text).toBe('line two');
+  });
+
+  test('tool_complete with single-block result forwards that block directly', async () => {
+    const { emitter, calls } = makeEmitter();
+    const bridge = new McpToolCallBridge(() => emitter);
+    const handler = bridge.makeProgressHandler(SESSION_ID);
+
+    const mcpResult = {
+      content: [{ type: 'text', text: 'file contents here' }],
+      isError: false,
+    };
+
+    handler({ type: 'tool_start', turn: 1, toolName: 'mcp__fs__read_file' });
+    await settle();
+    handler({ type: 'tool_complete', turn: 1, toolName: 'mcp__fs__read_file', durationMs: 5, result: { data: mcpResult } });
+    await settle();
+
+    const updates = calls.filter((c) => c.method === 'emitToolCallUpdate') as Extract<EmitterCall, { method: 'emitToolCallUpdate' }>[];
+    const completed = updates.find((u) => u.status === 'completed')!;
+    expect(completed.content).toHaveLength(1);
+    const block = completed.content?.[0] as { type: string; content: { type: string; text: string } };
+    expect(block.type).toBe('content');
+    expect(block.content.text).toBe('file contents here');
+  });
+
+  test('tool_complete with empty content array forwards empty array', async () => {
+    const { emitter, calls } = makeEmitter();
+    const bridge = new McpToolCallBridge(() => emitter);
+    const handler = bridge.makeProgressHandler(SESSION_ID);
+
+    const mcpResult = { content: [], isError: false };
+
+    handler({ type: 'tool_start', turn: 1, toolName: 'mcp__fs__read_file' });
+    await settle();
+    handler({ type: 'tool_complete', turn: 1, toolName: 'mcp__fs__read_file', durationMs: 5, result: { data: mcpResult } });
+    await settle();
+
+    const updates = calls.filter((c) => c.method === 'emitToolCallUpdate') as Extract<EmitterCall, { method: 'emitToolCallUpdate' }>[];
+    const completed = updates.find((u) => u.status === 'completed')!;
+    expect(completed.content).toHaveLength(0);
+  });
+
+  test('tool_complete with no result forwards empty content', async () => {
+    const { emitter, calls } = makeEmitter();
+    const bridge = new McpToolCallBridge(() => emitter);
+    const handler = bridge.makeProgressHandler(SESSION_ID);
+
+    handler({ type: 'tool_start', turn: 1, toolName: 'mcp__fs__read_file' });
+    await settle();
+    handler({ type: 'tool_complete', turn: 1, toolName: 'mcp__fs__read_file', durationMs: 5 });
+    await settle();
+
+    const updates = calls.filter((c) => c.method === 'emitToolCallUpdate') as Extract<EmitterCall, { method: 'emitToolCallUpdate' }>[];
+    const completed = updates.find((u) => u.status === 'completed')!;
+    expect(completed.content).toHaveLength(0);
+  });
+
+  test('content blocks preserve non-text types (e.g. image)', async () => {
+    const { emitter, calls } = makeEmitter();
+    const bridge = new McpToolCallBridge(() => emitter);
+    const handler = bridge.makeProgressHandler(SESSION_ID);
+
+    const mcpResult = {
+      content: [
+        { type: 'image', data: 'base64data', mimeType: 'image/png' },
+      ],
+      isError: false,
+    };
+
+    handler({ type: 'tool_start', turn: 1, toolName: 'mcp__img__screenshot' });
+    await settle();
+    handler({ type: 'tool_complete', turn: 1, toolName: 'mcp__img__screenshot', durationMs: 20, result: { data: mcpResult } });
+    await settle();
+
+    const updates = calls.filter((c) => c.method === 'emitToolCallUpdate') as Extract<EmitterCall, { method: 'emitToolCallUpdate' }>[];
+    const completed = updates.find((u) => u.status === 'completed')!;
+    const block = completed.content?.[0] as { type: string; content: { type: string; data: string; mimeType: string } };
+    expect(block.type).toBe('content');
+    expect(block.content.type).toBe('image');
+    expect(block.content.data).toBe('base64data');
+    expect(block.content.mimeType).toBe('image/png');
   });
 });

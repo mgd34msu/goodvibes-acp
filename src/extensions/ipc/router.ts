@@ -114,6 +114,7 @@ export class IpcRouter {
       uptime: process.uptime(),
       memoryUsage: process.memoryUsage(),
       handlerCount: this._eventBus?.handlerCount ?? 0,
+      timestamp: Date.now(),
     }));
   }
 }

@@ -30,8 +30,8 @@ export type GoodVibesMode = 'justvibes' | 'vibecoding' | 'sandbox' | 'plan';
 // Config option IDs
 // ---------------------------------------------------------------------------
 
-const CONFIG_ID_MODE = 'mode' as const;
-const CONFIG_ID_MODEL = 'model' as const;
+const CONFIG_ID_MODE = 'goodvibes.mode' as const;
+const CONFIG_ID_MODEL = 'goodvibes.model' as const;
 
 // ---------------------------------------------------------------------------
 // buildConfigOptions
@@ -113,6 +113,50 @@ export function buildConfigOptions(
   };
 
   return [modeOption, modelOption];
+}
+
+// ---------------------------------------------------------------------------
+// buildLegacyModes
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the legacy `SessionModeState` shape for session/new and session/load
+ * responses.
+ *
+ * Per the ACP session-modes spec (transition period), agents SHOULD include
+ * both the new `configOptions` field AND the legacy `modes` field so that
+ * clients that have not yet migrated to `configOptions` continue to work.
+ *
+ * @param currentMode - Current GoodVibes mode (defaults to 'justvibes')
+ */
+export function buildLegacyModes(
+  currentMode: GoodVibesMode = 'justvibes',
+): schema.SessionModeState {
+  return {
+    currentModeId: currentMode,
+    availableModes: [
+      {
+        id: 'justvibes',
+        name: 'Just Vibes',
+        description: 'Standard mode with full guardrails.',
+      },
+      {
+        id: 'vibecoding',
+        name: 'Vibecoding',
+        description: 'Relaxed mode optimized for rapid prototyping.',
+      },
+      {
+        id: 'sandbox',
+        name: 'Sandbox',
+        description: 'Sandbox mode for isolated, unrestricted experimentation.',
+      },
+      {
+        id: 'plan',
+        name: 'Plan',
+        description: 'Plan mode for reviewing and approving actions before execution.',
+      },
+    ] satisfies schema.SessionMode[],
+  };
 }
 
 // ---------------------------------------------------------------------------

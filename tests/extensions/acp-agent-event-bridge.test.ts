@@ -156,7 +156,7 @@ describe('AgentEventBridge', () => {
       expect(update.status).toBe('completed');
     });
 
-    it('emits tool_call_update with failed status when to=failed', async () => {
+    it('emits tool_call_update with error status when to=failed', async () => {
       const { conn, calls } = makeConn();
       const tracker = makeTracker({ 'agent-1': 'sess-1' });
       const bridge = new AgentEventBridge(conn, bus, tracker);
@@ -166,10 +166,10 @@ describe('AgentEventBridge', () => {
       await new Promise((r) => setTimeout(r, 0));
 
       const update = (calls[0] as { update: Record<string, unknown> }).update;
-      expect(update.status).toBe('failed');
+      expect(update.status).toBe('error');
     });
 
-    it('emits tool_call_update with failed status when to=cancelled', async () => {
+    it('emits tool_call_update with cancelled status when to=cancelled', async () => {
       const { conn, calls } = makeConn();
       const tracker = makeTracker({ 'agent-1': 'sess-1' });
       const bridge = new AgentEventBridge(conn, bus, tracker);
@@ -179,7 +179,7 @@ describe('AgentEventBridge', () => {
       await new Promise((r) => setTimeout(r, 0));
 
       const update = (calls[0] as { update: Record<string, unknown> }).update;
-      expect(update.status).toBe('failed');
+      expect(update.status).toBe('cancelled');
     });
   });
 

@@ -407,8 +407,8 @@ describe('WRFCOrchestrator', () => {
       signal: controller.signal,
     });
 
-    // Aborted runs end in failed or escalated (not complete)
-    expect(['failed', 'escalated']).toContain(ctx.state);
+    // Aborted runs end in failed, escalated, or cancelled (not complete)
+    expect(['failed', 'escalated', 'cancelled']).toContain(ctx.state);
   });
 
   it('emits wrfc events on the event bus during a full run', async () => {

@@ -115,6 +115,12 @@ export type WRFCContext = {
    * from a genuine escalation (repeated review failures).
    */
   cancelledAt?: number;
+  /**
+   * ACP stop reason derived from the innermost agent loop result.
+   * Propagated so the prompt handler can return 'max_tokens' or
+   * 'max_turn_requests' instead of always returning 'end_turn'.
+   */
+  stopReason?: 'end_turn' | 'max_tokens' | 'max_turn_requests' | 'cancelled';
 };
 
 // ---------------------------------------------------------------------------

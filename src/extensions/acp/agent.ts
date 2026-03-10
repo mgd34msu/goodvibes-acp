@@ -13,7 +13,7 @@ import type { SessionContext, HistoryMessage } from '../../types/session.js';
 import { SessionManager } from '../sessions/manager.js';
 import { Registry } from '../../core/registry.js';
 import { EventBus } from '../../core/event-bus.js';
-import { buildConfigOptions, modeFromConfigValue, CONFIG_ID_MODE, CONFIG_ID_MODEL } from './config-adapter.js';
+import { buildConfigOptions, buildLegacyModes, modeFromConfigValue, CONFIG_ID_MODE, CONFIG_ID_MODEL } from './config-adapter.js';
 import { toAcpError, ACP_ERROR_CODES } from './errors.js';
 import type { McpBridge } from '../mcp/bridge.js';
 import { PlanEmitter } from './plan-emitter.js';
@@ -46,7 +46,64 @@ interface WRFCRunner {
     sessionId: string;
     task: string;
     signal?: AbortSignal;
-  }): Promise<{ state: string; lastScore?: { overall: number } }>;
+  }): Promise<{
+    state: string;
+    lastScore?: { overall: number };
+    /**
+     * ACP stop reason derived from the innermost agent loop result.
+     * Propagated so the prompt handler can return 'max_tokens' or
+     * 'max_turn_requests' instead of always returning 'end_turn'.
+     */
+    stopReason?: 'end_turn' | 'max_tokens' | 'max_turn_requests';
+  }>;
+}
+
+// ---------------------------------------------------------------------------
+// PendingRequestTracker
+// ---------------------------------------------------------------------------
+
+/**
+ * Tracks in-flight JSON-RPC request IDs sent by the agent to the client
+ * (e.g. terminal/create, session/request_permission, fs/* calls).
+ *
+ * When a session is cancelled, the agent MUST send `$/cancel_request`
+ * notifications for each pending client request so the client can respond
+ * with -32800 errors and the agent can then reply to the original
+ * session/prompt with stopReason: 'cancelled'.
+ *
+ * ACP spec: docs/protocol/draft/cancellation.mdx
+ */
+class PendingRequestTracker {
+  private readonly _pending = new Map<string, Set<string>>();
+
+  /** Register a pending client-side request ID for a session */
+  add(sessionId: string, requestId: string): void {
+    let set = this._pending.get(sessionId);
+    if (!set) {
+      set = new Set();
+      this._pending.set(sessionId, set);
+    }
+    set.add(requestId);
+  }
+
+  /** Remove a resolved/cancelled request ID */
+  remove(sessionId: string, requestId: string): void {
+    this._pending.get(sessionId)?.delete(requestId);
+  }
+
+  /** Drain all pending request IDs for a session (returns them for cancellation) */
+  drain(sessionId: string): string[] {
+    const set = this._pending.get(sessionId);
+    if (!set || set.size === 0) return [];
+    const ids = Array.from(set);
+    set.clear();
+    return ids;
+  }
+
+  /** Clean up session state */
+  delete(sessionId: string): void {
+    this._pending.delete(sessionId);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -54,11 +111,11 @@ interface WRFCRunner {
 // ---------------------------------------------------------------------------
 
 /**
- * Build a typed user_message_chunk or agent_message_chunk SessionUpdate.
- * Avoids `as` casts by constructing the discriminated union directly.
+ * Build a typed user_message_chunk, agent_message_chunk, or agent_thought_chunk
+ * SessionUpdate. Avoids `as` casts by constructing the discriminated union directly.
  */
 function messageChunkUpdate(
-  updateType: 'user_message_chunk' | 'agent_message_chunk',
+  updateType: 'user_message_chunk' | 'agent_message_chunk' | 'agent_thought_chunk',
   content: schema.ContentBlock,
 ): schema.SessionUpdate {
   return { sessionUpdate: updateType, content };
@@ -102,6 +159,91 @@ function sessionInfoUpdate(title: string): schema.SessionUpdate {
 }
 
 // ---------------------------------------------------------------------------
+// Prompt content processing
+// ---------------------------------------------------------------------------
+
+/**
+ * Determine if a MIME type represents text content that can be decoded from base64.
+ */
+function isTextMimeType(mimeType: string | undefined): boolean {
+  if (!mimeType) return false;
+  return (
+    mimeType.startsWith('text/') ||
+    mimeType === 'application/json' ||
+    mimeType === 'application/xml' ||
+    mimeType === 'application/javascript' ||
+    mimeType === 'application/typescript'
+  );
+}
+
+/**
+ * Result of processing prompt content blocks.
+ */
+export interface ProcessedPrompt {
+  /** Flat text string for the WRFC task runner. */
+  task: string;
+  /** Rich content blocks for history storage. */
+  richContent: Array<{ type: string; [key: string]: unknown }>;
+}
+
+/**
+ * Process ACP prompt content blocks into a task string and rich history content.
+ *
+ * Handles three block types:
+ * - `text`: extracted verbatim
+ * - `resource`: text resources extracted with URI delimiter; blob resources decoded
+ *   if the MIME type is text-like, otherwise replaced with a placeholder
+ * - `resource_link`: included as a placeholder (agent cannot fetch the content)
+ */
+export function processPromptBlocks(blocks: schema.ContentBlock[]): ProcessedPrompt {
+  const parts: string[] = [];
+  const richContent: Array<{ type: string; [key: string]: unknown }> = [];
+
+  for (const block of blocks) {
+    if (block.type === 'text' && 'text' in block) {
+      const text = (block as { type: 'text'; text: string }).text;
+      parts.push(text);
+      richContent.push({ type: 'text', text });
+    } else if (block.type === 'resource' && 'resource' in block) {
+      const res = (block as { type: 'resource'; resource: Record<string, unknown> }).resource;
+      const uri = typeof res['uri'] === 'string' ? res['uri'] : '<unknown>';
+      const mimeType = typeof res['mimeType'] === 'string' ? res['mimeType'] : undefined;
+
+      let content: string;
+      if (typeof res['text'] === 'string') {
+        // Text resource
+        content = res['text'];
+      } else if (typeof res['blob'] === 'string') {
+        // Blob resource — decode if text mime type
+        if (isTextMimeType(mimeType)) {
+          try {
+            content = Buffer.from(res['blob'], 'base64').toString('utf-8');
+          } catch {
+            content = `[binary resource: ${uri}]`;
+          }
+        } else {
+          content = `[binary resource: ${uri}]`;
+        }
+      } else {
+        content = `[resource: ${uri}]`;
+      }
+
+      parts.push(`\n--- Resource: ${uri} ---\n${content}\n`);
+      richContent.push({ ...block });
+    } else if (block.type === 'resource_link' && 'resource_link' in block) {
+      const link = (block as { type: 'resource_link'; resource_link: Record<string, unknown> }).resource_link;
+      const uri = typeof link['uri'] === 'string' ? link['uri'] : '<unknown>';
+      const name = typeof link['name'] === 'string' ? link['name'] : uri;
+      parts.push(`[Resource link: ${uri} - ${name}]`);
+      richContent.push({ ...block });
+    }
+    // Unknown block types are silently skipped
+  }
+
+  return { task: parts.join('\n'), richContent };
+}
+
+// ---------------------------------------------------------------------------
 // GoodVibesAgent
 // ---------------------------------------------------------------------------
 
@@ -120,6 +262,9 @@ export class GoodVibesAgent implements Agent {
 
   /** Per-session AbortControllers for cancellation */
   private readonly _abortControllers = new Map<string, AbortController>();
+
+  /** Tracks in-flight client-side request IDs for cascading cancellation (ACP spec) */
+  private readonly _pendingRequests = new PendingRequestTracker();
 
   /** Plan emitter for WRFC phase visibility */
   private readonly planEmitter: PlanEmitter;
@@ -167,11 +312,25 @@ export class GoodVibesAgent implements Agent {
       this.eventBus.on('wrfc:state-changed', (event) => {
         const p = event.payload as { sessionId: string; to: string; attempt: number };
         // completedSteps = attempt index; totalSteps = 0 (not known at this layer)
-        this._extensions!.pushStatus(conn, p.sessionId, p.to, p.attempt, 0).catch(() => {
-          // Swallow push errors — client may have disconnected
+        this._extensions!.pushStatus(conn, p.sessionId, p.to, p.attempt, 0).catch((err) => {
+          // Intentional: fire-and-forget status notification — client may have disconnected
+          console.error('[GoodVibesAgent] pushStatus(wrfc:state-changed) failed:', String(err));
         });
       });
     }
+
+    // Wire EventBus-based request tracking so bridge classes automatically populate
+    // _pendingRequests without needing explicit tracker constructor injection.
+    // Bridges emit 'acp:client-request:start' / 'acp:client-request:end' events;
+    // the agent subscribes here to decouple the tracker from bridge construction.
+    this.eventBus.on('acp:client-request:start', (event) => {
+      const p = event.payload as { sessionId: string; requestId: string };
+      this._pendingRequests.add(p.sessionId, p.requestId);
+    });
+    this.eventBus.on('acp:client-request:end', (event) => {
+      const p = event.payload as { sessionId: string; requestId: string };
+      this._pendingRequests.remove(p.sessionId, p.requestId);
+    });
 
     // ISS-109: Mark bridges as ready after all EventBus listeners are established.
     this._bridgesReady = true;
@@ -215,17 +374,18 @@ export class GoodVibesAgent implements Agent {
         loadSession: true,
         // NOTE: SDK field name is `mcpCapabilities` (schema.AgentCapabilities line 27).
         // ACP spec prose uses `mcp` but the TypeScript SDK type uses `mcpCapabilities`.
-        mcpCapabilities: { http: false, sse: false },
+        mcpCapabilities: { http: true, sse: false },
         promptCapabilities: {
           embeddedContext: true,
           image: false,
           audio: false,
         },
-        // ISS-030: Advertise session capabilities (all unstable features disabled).
+        // ISS-030: Advertise session capabilities.
         // SDK type: fork/list/resume are `XxxCapabilities | null` — null means not supported.
+        // list: {} means supported (SessionListCapabilities accepts an empty object).
         sessionCapabilities: {
           fork: null,
-          list: null,
+          list: {},
           resume: null,
         },
       },
@@ -265,6 +425,10 @@ export class GoodVibesAgent implements Agent {
     return {
       sessionId,
       configOptions: buildConfigOptions(),
+      // Per ACP session-modes spec (transition period): include legacy `modes`
+      // alongside the new `configOptions` so clients that have not yet migrated
+      // continue to receive mode state on session/new.
+      modes: buildLegacyModes(),
     };
   }
 
@@ -280,7 +444,14 @@ export class GoodVibesAgent implements Agent {
     let loaded: { context: SessionContext; history: HistoryMessage[] };
 
     try {
-      loaded = await this.sessions.load(params.sessionId);
+      // ISS-004 / ISS-019: Pass request-level cwd and mcpServers overrides to
+      // SessionManager.load() so stored context is updated on resume.
+      loaded = await this.sessions.load(params.sessionId, {
+        ...(params.cwd !== undefined ? { cwd: params.cwd } : {}),
+        ...(params.mcpServers !== undefined
+          ? { mcpServers: params.mcpServers as unknown as import('../../types/session.js').MCPServerConfig[] }
+          : {}),
+      });
     } catch (err) {
       const acpErr = toAcpError(err);
       throw Object.assign(new Error(acpErr.message), { code: acpErr.code });
@@ -289,8 +460,8 @@ export class GoodVibesAgent implements Agent {
     const { context, history } = loaded;
 
     // Reconnect MCP servers if bridge is available.
-    // The spec requires that MCP servers be restored on session/load so that
-    // the client's tool set is fully available without a new session.
+    // Use the updated context — which reflects params.mcpServers when provided,
+    // falling back to the stored config when params.mcpServers was omitted.
     // MCPServerConfig (L0 stored config) is structurally compatible with
     // McpServerStdio for stdio transport; cast to McpServer[] for bridge.
     if (this.mcpBridge && context.config.mcpServers && context.config.mcpServers.length > 0) {
@@ -307,8 +478,14 @@ export class GoodVibesAgent implements Agent {
 
     // Stream history back as session updates
     for (const msg of history) {
+      // Map role to ACP session update discriminator:
+      //   'user'      → user_message_chunk
+      //   'assistant' → agent_message_chunk
+      //   'thinking'  → agent_thought_chunk (ACP prompt-turn spec)
       const updateType =
-        msg.role === 'user' ? 'user_message_chunk' : 'agent_message_chunk';
+        msg.role === 'user' ? 'user_message_chunk'
+        : msg.role === 'thinking' ? 'agent_thought_chunk'
+        : 'agent_message_chunk';
 
       await this.conn.sessionUpdate({
         sessionId: params.sessionId,
@@ -316,7 +493,10 @@ export class GoodVibesAgent implements Agent {
             updateType,
             typeof msg.content === 'string'
               ? { type: 'text', text: msg.content }
-              : { type: 'text', text: '' },
+              : Array.isArray(msg.content)
+                ? (msg.content.find((b) => b.type === 'text') as { type: 'text'; text: string } | undefined) ??
+                  { type: 'text', text: '' }
+                : { type: 'text', text: '' },
           ),
       });
     }
@@ -325,11 +505,16 @@ export class GoodVibesAgent implements Agent {
     // duplicate sessionUpdate notification has been removed to avoid sending
     // identical payloads to the client. The response carries config options
     // and is always delivered, making the notification redundant.
+    const loadedMode = modeFromConfigValue(context.config.mode);
     return {
       configOptions: buildConfigOptions(
-        modeFromConfigValue(context.config.mode),
+        loadedMode,
         context.config.model,
       ),
+      // Per ACP session-modes spec (transition period): include legacy `modes`
+      // alongside the new `configOptions` so clients that have not yet migrated
+      // continue to receive mode state on session/load.
+      modes: buildLegacyModes(loadedMode),
     };
   }
 
@@ -367,22 +552,17 @@ export class GoodVibesAgent implements Agent {
 
     const { sessionId, prompt } = params;
 
-    // Extract text from prompt blocks
-    const task = prompt
-      .filter((block: schema.ContentBlock): block is schema.ContentBlock & { type: 'text'; text: string } =>
-        block.type === 'text' && 'text' in block,
-      )
-      .map((block: schema.ContentBlock & { type: 'text'; text: string }) => block.text)
-      .join('\n');
+    // Extract text and rich content from prompt blocks (handles text, resource, resource_link)
+    const { task, richContent } = processPromptBlocks(prompt);
 
     // Create a per-prompt AbortController
     const controller = new AbortController();
     this._abortControllers.set(sessionId, controller);
 
-    // Record user message in history
+    // Record user message in history with full rich content blocks
     await this.sessions.addHistory(sessionId, {
       role: 'user',
-      content: task,
+      content: richContent.length > 0 ? richContent : task,
       timestamp: Date.now(),
     });
 
@@ -408,6 +588,14 @@ export class GoodVibesAgent implements Agent {
       if (controller.signal.aborted) {
         // ISS-103: Do not emit non-spec 'finish' update; stopReason is in the return value
         return { stopReason: 'cancelled' };
+      }
+
+      // Propagate explicit stop reasons from the agent loop:
+      // max_tokens — LLM response was truncated (KB-04 lines 446-460)
+      // max_turn_requests — turn count limit exceeded
+      if (result.stopReason === 'max_tokens' || result.stopReason === 'max_turn_requests') {
+        console.error(`[GoodVibesAgent] Returning stopReason='${result.stopReason}' from WRFC result`);
+        return { stopReason: result.stopReason };
       }
 
       // Build summary for the client
@@ -455,7 +643,33 @@ export class GoodVibesAgent implements Agent {
       throw Object.assign(new Error(acpErr.message), { code: acpErr.code });
     } finally {
       this._abortControllers.delete(sessionId);
+      this._pendingRequests.delete(sessionId);
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // getRequestTracker
+  // -------------------------------------------------------------------------
+
+  /**
+   * Returns a RequestTracker bound to the given sessionId.
+   *
+   * Pass the returned tracker to bridge instances (AcpTerminal, AcpFileSystem,
+   * PermissionGate) so their in-flight request IDs are registered in the
+   * agent's PendingRequestTracker. When cancel() is called, it drains the
+   * tracker and sends `$/cancel_request` for all pending requests.
+   *
+   * NOTE: Bridges are currently created ad-hoc in tests. When bridges are
+   * instantiated in the production path (e.g. via session context injection
+   * from the composition root), pass the tracker returned here.
+   *
+   * ACP spec: docs/protocol/draft/cancellation.mdx
+   */
+  getRequestTracker(sessionId: string): import('./terminal-bridge.js').RequestTracker {
+    return {
+      add: (requestId: string) => this._pendingRequests.add(sessionId, requestId),
+      remove: (requestId: string) => this._pendingRequests.remove(sessionId, requestId),
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -464,10 +678,36 @@ export class GoodVibesAgent implements Agent {
 
   /**
    * Cancel an in-progress prompt turn for the given session.
+   *
+   * Per ACP spec (docs/protocol/draft/cancellation.mdx):
+   * 1. Abort the local AbortController (propagates into WRFC / agent loop)
+   * 2. Send `$/cancel_request` for any in-flight client-side requests
+   *    (terminal/create, session/request_permission, fs/* calls)
+   *    so the client can respond with -32800 and clean up its side.
+   *
+   * The `$/cancel_request` notification payload uses `{ id }` per JSON-RPC 2.0
+   * / LSP cancellation convention (same field name used by LSP `$/cancelRequest`).
    */
   async cancel(params: schema.CancelNotification): Promise<void> {
-    const controller = this._abortControllers.get(params.sessionId);
+    const { sessionId } = params;
+
+    // Step 1: abort the running WRFC/AgentLoop signal
+    const controller = this._abortControllers.get(sessionId);
     controller?.abort();
+
+    // Step 2: cascade cancellation to all pending client-side requests
+    const pendingIds = this._pendingRequests.drain(sessionId);
+    for (const id of pendingIds) {
+      // extNotification is fire-and-forget — the client handles it asynchronously
+      this.conn.extNotification('$/cancel_request', { id }).catch((err) => {
+        console.error(`[GoodVibesAgent] $/cancel_request(${id}) failed:`, String(err));
+        this.eventBus.emit('acp:cancel-request:failed', { sessionId, requestId: id, error: String(err) });
+      });
+    }
+
+    if (pendingIds.length > 0) {
+      console.error(`[GoodVibesAgent] cancel(${sessionId}): sent $/cancel_request for ${pendingIds.length} pending request(s)`);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -485,7 +725,7 @@ export class GoodVibesAgent implements Agent {
     await this.conn.sessionUpdate({
       sessionId: params.sessionId,
       update: { sessionUpdate: 'current_mode_update', currentModeId: params.modeId },
-    }).catch(() => {});
+    }).catch((err) => { console.error('[GoodVibesAgent] setSessionMode sessionUpdate failed:', String(err)); });
   }
 
   // -------------------------------------------------------------------------
@@ -517,6 +757,76 @@ export class GoodVibesAgent implements Agent {
 
     return {
       configOptions: buildConfigOptions(currentMode, currentModel),
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // unstable_listSessions
+  // -------------------------------------------------------------------------
+
+  /**
+   * List sessions with optional cwd filtering and cursor-based pagination.
+   *
+   * Implements the `session/list` ACP endpoint.
+   * Page size: 20. Cursor is a base64-encoded page index (1-based).
+   * Invalid cursor → JSON-RPC error (-32602 INVALID_PARAMS).
+   */
+  async unstable_listSessions(
+    params: schema.ListSessionsRequest,
+  ): Promise<schema.ListSessionsResponse> {
+    const PAGE_SIZE = 20;
+
+    // Parse cursor — base64-encoded stringified page index (1-based)
+    let page = 1;
+    if (params.cursor != null && params.cursor !== '') {
+      try {
+        const decoded = Buffer.from(params.cursor, 'base64').toString('utf8');
+        const parsed = JSON.parse(decoded) as unknown;
+        if (typeof parsed !== 'number' || !Number.isInteger(parsed) || parsed < 1) {
+          throw new Error('invalid cursor value');
+        }
+        page = parsed;
+      } catch {
+        throw Object.assign(
+          new Error(`Invalid cursor: ${params.cursor}`),
+          { code: ACP_ERROR_CODES.INVALID_PARAMS },
+        );
+      }
+    }
+
+    // Fetch all sessions
+    let all = await this.sessions.list();
+
+    // Filter by cwd if provided
+    if (params.cwd != null && params.cwd !== '') {
+      all = all.filter((s) => s.cwd === params.cwd);
+    }
+
+    // Sort by updatedAt descending (most recently updated first)
+    all.sort((a, b) => b.updatedAt - a.updatedAt);
+
+    // Paginate
+    const offset = (page - 1) * PAGE_SIZE;
+    const pageItems = all.slice(offset, offset + PAGE_SIZE);
+    const hasMore = offset + PAGE_SIZE < all.length;
+
+    // Map SessionSummary → ACP SessionInfo
+    const sessions: schema.SessionInfo[] = pageItems.map((s) => ({
+      sessionId: s.id,
+      cwd: s.cwd,
+      ...(s.title !== undefined ? { title: s.title } : {}),
+      updatedAt: new Date(s.updatedAt).toISOString(),
+      _meta: { messageCount: 0 },
+    }));
+
+    // Build nextCursor if there are more results
+    const nextCursor = hasMore
+      ? Buffer.from(JSON.stringify(page + 1)).toString('base64')
+      : undefined;
+
+    return {
+      sessions,
+      ...(nextCursor !== undefined ? { nextCursor } : {}),
     };
   }
 
@@ -556,8 +866,28 @@ export class GoodVibesAgent implements Agent {
     }
 
     // Fallback: _extensions not wired (composition root did not supply deps).
-    // Return a minimal response so the call doesn't hard-fail.
-    return { error: 'extensions_not_wired', method };
+    // Provide minimal inline handling for core methods so callers don't hard-fail
+    // in test/lightweight contexts where full runtime deps are unavailable.
+    switch (method) {
+      case '_goodvibes/state': {
+        const sessionId = typeof params['sessionId'] === 'string' ? params['sessionId'] : undefined;
+        if (sessionId !== undefined) {
+          const session = await this.sessions.get(sessionId);
+          return { session: session ?? null };
+        }
+        return { runtime: 'goodvibes', version: RUNTIME_VERSION };
+      }
+      case '_goodvibes/agents': {
+        const agents = this.registry.get<unknown>('agent-spawner') ?? [];
+        return { agents };
+      }
+      default: {
+        // Unknown _goodvibes/* methods throw METHOD_NOT_FOUND per JSON-RPC 2.0
+        const err = new Error(`Unknown extension method: ${method}`);
+        (err as Error & { code: number }).code = ACP_ERROR_CODES.METHOD_NOT_FOUND;
+        throw err;
+      }
+    }
   }
 
   // -------------------------------------------------------------------------

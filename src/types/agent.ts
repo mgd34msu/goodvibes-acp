@@ -85,6 +85,12 @@ export type AgentResult = {
   errors: AgentError[];
   /** Total duration in milliseconds */
   durationMs: number;
+  /**
+   * ACP stop reason from the underlying AgentLoop.
+   * Populated for completed agents. Absent for failed/cancelled/stub agents.
+   * Values: 'end_turn' | 'max_tokens' | 'max_turn_requests'
+   */
+  stopReason?: string;
 };
 
 /** A structured error reported by an agent */
@@ -108,6 +114,8 @@ export type AgentError = {
 export type AgentProgressEvent =
   | { type: 'llm_start'; turn: number }
   | { type: 'llm_complete'; turn: number; stopReason: string; usage: { inputTokens: number; outputTokens: number } }
+  | { type: 'agent_message_chunk'; chunk: { type: 'text'; text: string } }
+  | { type: 'agent_thought_chunk'; chunk: { type: 'text'; text: string } }
   | { type: 'tool_start'; turn: number; toolName: string }
   | { type: 'tool_complete'; turn: number; toolName: string; durationMs: number; result?: { data?: unknown; isError?: boolean } }
   | { type: 'tool_error'; turn: number; toolName: string; error: string };

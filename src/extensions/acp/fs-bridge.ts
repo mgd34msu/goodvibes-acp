@@ -11,6 +11,8 @@ import type * as schema from '@agentclientprotocol/sdk';
 import type { ITextFileAccess, ReadOptions, WriteOptions } from '../../types/registry.js';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import type { RequestTracker } from './terminal-bridge.js';
+import type { EventBus } from '../../core/event-bus.js';
 
 // ---------------------------------------------------------------------------
 // Module-level constants
@@ -39,6 +41,8 @@ export class AcpFileSystem implements ITextFileAccess {
     private readonly conn: AgentSideConnection,
     private readonly sessionId: string,
     private readonly clientCapabilities: schema.ClientCapabilities,
+    private readonly _tracker?: RequestTracker,
+    private readonly _eventBus?: EventBus,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -53,12 +57,21 @@ export class AcpFileSystem implements ITextFileAccess {
    */
   async readTextFile(path: string, options?: ReadOptions): Promise<string> {
     if (this.clientCapabilities.fs?.readTextFile) {
-      const response = await this.conn.readTextFile({
-        path,
-        sessionId: this.sessionId,
-        line: options?.line,
-        limit: options?.limit,
-      });
+      const _reqId = crypto.randomUUID();
+      this._tracker?.add(_reqId);
+      this._eventBus?.emit('acp:client-request:start', { sessionId: this.sessionId, requestId: _reqId });
+      let response: Awaited<ReturnType<AgentSideConnection['readTextFile']>>;
+      try {
+        response = await this.conn.readTextFile({
+          path,
+          sessionId: this.sessionId,
+          line: options?.line,
+          limit: options?.limit,
+        });
+      } finally {
+        this._tracker?.remove(_reqId);
+        this._eventBus?.emit('acp:client-request:end', { sessionId: this.sessionId, requestId: _reqId });
+      }
       return response.content;
     }
 
@@ -98,11 +111,19 @@ export class AcpFileSystem implements ITextFileAccess {
           `ACP fs/write_text_file does not support encoding '${options.encoding}' — only UTF-8 is supported on the ACP path`
         );
       }
-      await this.conn.writeTextFile({
-        path,
-        content,
-        sessionId: this.sessionId,
-      });
+      const _reqId = crypto.randomUUID();
+      this._tracker?.add(_reqId);
+      this._eventBus?.emit('acp:client-request:start', { sessionId: this.sessionId, requestId: _reqId });
+      try {
+        await this.conn.writeTextFile({
+          path,
+          content,
+          sessionId: this.sessionId,
+        });
+      } finally {
+        this._tracker?.remove(_reqId);
+        this._eventBus?.emit('acp:client-request:end', { sessionId: this.sessionId, requestId: _reqId });
+      }
       return;
     }
 

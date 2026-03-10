@@ -50,6 +50,9 @@ function makeLoop(
     model: 'mock-model',
     systemPrompt: 'You are a test agent.',
     maxTurns: 10,
+    // Default to non-streaming so existing tests use chat() path unchanged.
+    // Streaming tests explicitly pass streaming: true.
+    streaming: false,
     ...overrides,
   });
 }
@@ -68,7 +71,7 @@ describe('AgentLoop — simple text response', () => {
 
     expect(result.output).toBe('Hello from the agent!');
     expect(result.turns).toBe(1);
-    expect(result.stopReason).toBe('complete');
+    expect(result.stopReason).toBe('end_turn');
     expect(result.error).toBeUndefined();
   });
 
@@ -87,10 +90,10 @@ describe('AgentLoop — simple text response', () => {
     const result = await loop.run('generate');
 
     expect(result.output).toBe('Part one.\nPart two.');
-    expect(result.stopReason).toBe('complete');
+    expect(result.stopReason).toBe('end_turn');
   });
 
-  it('stops on max_tokens stop reason and reports complete', async () => {
+  it('stops on max_tokens stop reason and returns max_tokens', async () => {
     const provider = new MockProvider();
     provider.enqueue({
       content: [{ type: 'text', text: 'truncated response' }],
@@ -102,7 +105,7 @@ describe('AgentLoop — simple text response', () => {
     const result = await loop.run('write a lot');
 
     expect(result.output).toBe('truncated response');
-    expect(result.stopReason).toBe('complete');
+    expect(result.stopReason).toBe('max_tokens');
   });
 });
 
@@ -128,7 +131,7 @@ describe('AgentLoop — tool use cycle', () => {
 
     expect(result.output).toBe('Done! Tool result processed.');
     expect(result.turns).toBe(2);
-    expect(result.stopReason).toBe('complete');
+    expect(result.stopReason).toBe('end_turn');
   });
 
   it('passes the tool input to the tool provider', async () => {
@@ -167,12 +170,12 @@ describe('AgentLoop — tool use cycle', () => {
     const loop = makeLoop(provider, { tools: [testProvider] });
     await loop.run('fetch data');
 
-    // Second LLM call messages: [initial_user, assistant_tool_use, user_tool_results]
+    // Second LLM call messages: [initial_user, assistant_tool_use, tool_tool_results]
     // The tool_result message is at index 2 (before assistant final response is appended)
     const secondCallMessages = provider.calls[1].messages;
-    // Index 2 = user message with tool_results (present when turn 2 was called)
+    // Index 2 = tool message with tool_results (present when turn 2 was called)
     const toolResultMessage = secondCallMessages[2];
-    expect(toolResultMessage.role).toBe('user');
+    expect(toolResultMessage.role).toBe('tool');
     const content = toolResultMessage.content as Array<{ type: string; content: string }>;
     expect(content[0].type).toBe('tool_result');
     expect(content[0].content).toBe(JSON.stringify({ items: [1, 2, 3] }));
@@ -196,7 +199,7 @@ describe('AgentLoop — max turns', () => {
     const loop = makeLoop(provider, { maxTurns: 3, tools: [toolProvider] });
     const result = await loop.run('loop forever');
 
-    expect(result.stopReason).toBe('max_turns');
+    expect(result.stopReason).toBe('max_turn_requests');
     expect(result.turns).toBe(3);
   });
 
@@ -218,7 +221,7 @@ describe('AgentLoop — max turns', () => {
     const loop = makeLoop(provider, { maxTurns: 2, tools: [toolProvider] });
     const result = await loop.run('do work');
 
-    expect(result.stopReason).toBe('max_turns');
+    expect(result.stopReason).toBe('max_turn_requests');
     expect(result.output).toBe('Working on it...');
   });
 });
@@ -290,10 +293,10 @@ describe('AgentLoop — tool execution error', () => {
     const result = await loop.run('run failing tool');
 
     // Should complete (LLM handled the error)
-    expect(result.stopReason).toBe('complete');
+    expect(result.stopReason).toBe('end_turn');
     expect(result.output).toBe('I encountered an error but recovered.');
 
-    // Second LLM call messages: [initial_user, assistant_tool_use, user_tool_results]
+    // Second LLM call messages: [initial_user, assistant_tool_use, tool_results]
     // Tool result message is at index 2
     const secondCall = provider.calls[1];
     const toolResultMsg = secondCall.messages[2];
@@ -344,9 +347,9 @@ describe('AgentLoop — unknown tool provider', () => {
     const loop = makeLoop(provider, { tools: [] });
     const result = await loop.run('use ghost tool');
 
-    expect(result.stopReason).toBe('complete');
+    expect(result.stopReason).toBe('end_turn');
 
-    // Second LLM call messages: [initial_user, assistant_tool_use, user_tool_results]
+    // Second LLM call messages: [initial_user, assistant_tool_use, tool_results]
     // Tool result message is at index 2
     const secondCall = provider.calls[1];
     const toolResultMsg = secondCall.messages[2];
@@ -472,10 +475,10 @@ describe('AgentLoop — multiple tool calls in one response', () => {
     const loop = makeLoop(provider, { tools: [toolProvider] });
     const result = await loop.run('use multiple tools');
 
-    expect(result.stopReason).toBe('complete');
+    expect(result.stopReason).toBe('end_turn');
     expect(executedTools).toEqual(['a', 'b', 'a']);
 
-    // Second LLM call messages: [initial_user, assistant_tool_use, user_tool_results]
+    // Second LLM call messages: [initial_user, assistant_tool_use, tool_results]
     // Tool results message is at index 2
     const secondCall = provider.calls[1];
     const toolResultsMsg = secondCall.messages[2];
@@ -530,5 +533,129 @@ describe('AgentLoop — token usage accumulation', () => {
 
     expect(result.usage.inputTokens).toBe(0);
     expect(result.usage.outputTokens).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 10. Streaming — agent_message_chunk events via provider.stream()
+// ---------------------------------------------------------------------------
+
+describe('AgentLoop — streaming', () => {
+  it('emits agent_message_chunk events for each text delta', async () => {
+    const provider = new MockProvider();
+    provider.enqueue(textResponse('Hello streaming world!'));
+
+    const events: AgentProgressEvent[] = [];
+    const loop = makeLoop(provider, {
+      streaming: true,
+      onProgress: (e) => events.push(e),
+    });
+    const result = await loop.run('say hello');
+
+    expect(result.output).toBe('Hello streaming world!');
+    expect(result.stopReason).toBe('end_turn');
+    expect(result.turns).toBe(1);
+
+    const chunkEvents = events.filter(e => e.type === 'agent_message_chunk');
+    expect(chunkEvents).toHaveLength(1);
+    if (chunkEvents[0].type === 'agent_message_chunk') {
+      expect(chunkEvents[0].chunk.type).toBe('text');
+      expect(chunkEvents[0].chunk.text).toBe('Hello streaming world!');
+    }
+  });
+
+  it('emits agent_message_chunk events for multi-block text responses', async () => {
+    const provider = new MockProvider();
+    provider.enqueue({
+      content: [
+        { type: 'text', text: 'Part one.' },
+        { type: 'text', text: 'Part two.' },
+      ],
+      stopReason: 'end_turn',
+      usage: { inputTokens: 10, outputTokens: 5 },
+    });
+
+    const events: AgentProgressEvent[] = [];
+    const loop = makeLoop(provider, {
+      streaming: true,
+      onProgress: (e) => events.push(e),
+    });
+    const result = await loop.run('generate');
+
+    expect(result.output).toBe('Part one.Part two.');
+
+    const chunkEvents = events.filter(e => e.type === 'agent_message_chunk');
+    expect(chunkEvents).toHaveLength(2);
+    if (chunkEvents[0].type === 'agent_message_chunk') {
+      expect(chunkEvents[0].chunk.text).toBe('Part one.');
+    }
+    if (chunkEvents[1].type === 'agent_message_chunk') {
+      expect(chunkEvents[1].chunk.text).toBe('Part two.');
+    }
+  });
+
+  it('handles tool_use cycles correctly in streaming mode', async () => {
+    const provider = new MockProvider();
+    provider.enqueue(toolUseResponse('mytools__greet', 'tool-s1', { name: 'world' }));
+    provider.enqueue(textResponse('Streaming done!'));
+
+    const toolProvider = makeToolProvider('mytools', 'greet', {
+      success: true,
+      data: 'Hello, world!',
+    });
+
+    const events: AgentProgressEvent[] = [];
+    const loop = makeLoop(provider, {
+      streaming: true,
+      tools: [toolProvider],
+      onProgress: (e) => events.push(e),
+    });
+    const result = await loop.run('greet someone');
+
+    expect(result.output).toBe('Streaming done!');
+    expect(result.turns).toBe(2);
+    expect(result.stopReason).toBe('end_turn');
+
+    // tool events should still fire
+    const toolStart = events.find(e => e.type === 'tool_start');
+    expect(toolStart).toBeDefined();
+    const toolComplete = events.find(e => e.type === 'tool_complete');
+    expect(toolComplete).toBeDefined();
+
+    // chunk event from the second (text) turn
+    const chunkEvents = events.filter(e => e.type === 'agent_message_chunk');
+    expect(chunkEvents.length).toBeGreaterThan(0);
+  });
+
+  it('accumulates usage from streaming stop chunk', async () => {
+    const provider = new MockProvider();
+    provider.enqueue({
+      content: [{ type: 'text', text: 'done' }],
+      stopReason: 'end_turn',
+      usage: { inputTokens: 42, outputTokens: 17 },
+    });
+
+    const loop = makeLoop(provider, { streaming: true });
+    const result = await loop.run('task');
+
+    expect(result.usage.inputTokens).toBe(42);
+    expect(result.usage.outputTokens).toBe(17);
+  });
+
+  it('falls back to chat() when streaming is false', async () => {
+    const provider = new MockProvider();
+    provider.enqueue(textResponse('non-streaming result'));
+
+    const events: AgentProgressEvent[] = [];
+    const loop = makeLoop(provider, {
+      streaming: false,
+      onProgress: (e) => events.push(e),
+    });
+    const result = await loop.run('task');
+
+    expect(result.output).toBe('non-streaming result');
+    // No chunk events when streaming is disabled
+    const chunkEvents = events.filter(e => e.type === 'agent_message_chunk');
+    expect(chunkEvents).toHaveLength(0);
   });
 });

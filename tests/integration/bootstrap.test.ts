@@ -553,77 +553,86 @@ describe('PermissionGate — mode policies', () => {
 
   test('justvibes policy auto-approves all permission types', () => {
     const policy = MODE_POLICIES['justvibes'] as PermissionPolicy;
-    expect(policy.autoApprove).toContain('tool_call');
-    expect(policy.autoApprove).toContain('file_read');
+    // ISS-068: spec-defined permission types (network, browser, shell, file_write, file_delete)
     expect(policy.autoApprove).toContain('file_write');
-    expect(policy.autoApprove).toContain('command_execute');
-    expect(policy.autoApprove).toContain('network_access');
+    expect(policy.autoApprove).toContain('file_delete');
+    expect(policy.autoApprove).toContain('network');
+    expect(policy.autoApprove).toContain('browser');
+    expect(policy.autoApprove).toContain('shell');
     expect(policy.alwaysDeny).toHaveLength(0);
     expect(policy.promptForUnknown).toBe(false);
   });
 
-  test('plan policy auto-approves file_read only and denies command_execute', () => {
+  test('plan policy auto-approves nothing and denies shell and file_delete', () => {
     const policy = MODE_POLICIES['plan'] as PermissionPolicy;
-    expect(policy.autoApprove).toContain('file_read');
-    expect(policy.alwaysDeny).toContain('command_execute');
+    // ISS-068/ISS-098: plan mode requires prompting for every gated action; file_read removed from autoApprove
+    // alwaysDeny uses spec-defined type 'shell' (not 'command_execute')
+    expect(policy.alwaysDeny).toContain('shell');
+    expect(policy.alwaysDeny).toContain('file_delete');
     expect(policy.promptForUnknown).toBe(true);
   });
 
-  test('sandbox policy denies network_access', () => {
+  test('sandbox policy denies network and browser', () => {
     const policy = MODE_POLICIES['sandbox'] as PermissionPolicy;
-    expect(policy.alwaysDeny).toContain('network_access');
+    // ISS-068: spec-defined type 'network' (not 'network_access')
+    expect(policy.alwaysDeny).toContain('network');
+    expect(policy.alwaysDeny).toContain('browser');
   });
 
-  test('justvibes gate auto-approves tool_call without contacting client', async () => {
+  test('justvibes gate auto-approves file_write without contacting client', async () => {
     const gate = new PermissionGate(
       makeNullConn(),
       'sess-just',
       MODE_POLICIES['justvibes'] as PermissionPolicy,
     );
+    // ISS-068: use spec-defined type 'file_write' (justvibes autoApprove includes file_write)
     const result = await gate.check({
-      type: 'tool_call',
-      title: 'Run precision tool',
+      type: 'file_write',
+      title: 'Write a file',
     });
-    expect(result.status).toBe('granted');
+    expect(result.granted).toBe(true);
   });
 
-  test('justvibes gate auto-approves network_access without contacting client', async () => {
+  test('justvibes gate auto-approves network without contacting client', async () => {
     const gate = new PermissionGate(
       makeNullConn(),
       'sess-just',
       MODE_POLICIES['justvibes'] as PermissionPolicy,
     );
+    // ISS-068: spec-defined type 'network' (not 'network_access')
     const result = await gate.check({
-      type: 'network_access',
+      type: 'network',
       title: 'Fetch external URL',
     });
-    expect(result.status).toBe('granted');
+    expect(result.granted).toBe(true);
   });
 
-  test('plan gate denies command_execute immediately', async () => {
+  test('plan gate denies shell immediately', async () => {
     const gate = new PermissionGate(
       makeNullConn(),
       'sess-plan',
       MODE_POLICIES['plan'] as PermissionPolicy,
     );
+    // ISS-068: spec-defined type 'shell' (not 'command_execute')
     const result = await gate.check({
-      type: 'command_execute',
+      type: 'shell',
       title: 'Run shell command',
     });
-    expect(result.status).toBe('denied');
+    expect(result.granted).toBe(false);
   });
 
-  test('sandbox gate denies network_access immediately', async () => {
+  test('sandbox gate denies network immediately', async () => {
     const gate = new PermissionGate(
       makeNullConn(),
       'sess-sandbox',
       MODE_POLICIES['sandbox'] as PermissionPolicy,
     );
+    // ISS-068: spec-defined type 'network' (not 'network_access')
     const result = await gate.check({
-      type: 'network_access',
+      type: 'network',
       title: 'External API call',
     });
-    expect(result.status).toBe('denied');
+    expect(result.granted).toBe(false);
   });
 
   test('justvibes gate auto-approves unknown permission types (promptForUnknown=false)', async () => {
@@ -637,31 +646,39 @@ describe('PermissionGate — mode policies', () => {
       type: 'unknown_type' as never,
       title: 'Unknown action',
     });
-    expect(result.status).toBe('granted');
+    expect(result.granted).toBe(true);
   });
 
-  test('plan gate auto-approves file_read', async () => {
+  test('plan gate prompts for file_write (neither auto-approve nor always-deny)', async () => {
+    // ISS-068/ISS-098: plan mode has empty autoApprove array; file_write requires a prompt.
+    // Since makeNullConn() throws when requestPermission is called (simulating timeout),
+    // this test verifies the gate falls through to the promptForUnknown path.
+    // We can only verify it does NOT auto-approve and does NOT hard-fail with an unhandled error.
     const gate = new PermissionGate(
       makeNullConn(),
       'sess-plan',
       MODE_POLICIES['plan'] as PermissionPolicy,
     );
+    // file_write is not in autoApprove or alwaysDeny for plan, so it prompts.
+    // makeNullConn() rejects, which the gate catches and returns denied.
     const result = await gate.check({
-      type: 'file_read',
-      title: 'Read a file',
+      type: 'file_write',
+      title: 'Write a file',
     });
-    expect(result.status).toBe('granted');
+    // Permission is denied because the conn threw (makeNullConn rejects requestPermission)
+    expect(result.granted).toBe(false);
   });
 
-  test('vibecoding gate auto-approves file_write and command_execute', async () => {
+  test('vibecoding gate auto-approves file_write and shell', async () => {
     const gate = new PermissionGate(
       makeNullConn(),
       'sess-vibe',
       MODE_POLICIES['vibecoding'] as PermissionPolicy,
     );
-    for (const type of ['file_write', 'command_execute'] as const) {
+    // ISS-068: spec-defined type 'shell' (not 'command_execute')
+    for (const type of ['file_write', 'shell'] as const) {
       const result = await gate.check({ type, title: 'Test' });
-      expect(result.status).toBe('granted');
+      expect(result.granted).toBe(true);
     }
   });
 

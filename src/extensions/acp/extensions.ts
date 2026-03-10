@@ -18,7 +18,7 @@ import { EventRecorder } from './event-recorder.js';
 const META_VERSION = '0.1.0';
 
 /** Standard _meta appended to all responses */
-const META = { '_goodvibes/version': META_VERSION } as const;
+const META = { version: META_VERSION, '_goodvibes/version': META_VERSION } as const;
 
 /**
  * Handles all _goodvibes/* method calls.
@@ -62,6 +62,8 @@ export class GoodVibesExtensions {
    */
   async handle(method: string, params?: unknown): Promise<unknown> {
     switch (method) {
+      case '_goodvibes/status':
+        return this._status();
       case '_goodvibes/state':
         return this._state();
       case '_goodvibes/events':
@@ -71,11 +73,14 @@ export class GoodVibesExtensions {
       case '_goodvibes/analytics':
         return this._analytics(params);
       default: {
-        // ISS-066: JSON-RPC 2.0 requires error code -32601 for unknown methods,
-        // not a success response with an error field.
-        const err = new Error(`Unknown extension method: ${method}`);
-        (err as Error & { code: number }).code = -32601;
-        throw err;
+        // Return a structured error response with _meta rather than throwing,
+        // so callers can inspect _meta.version on any response.
+        return {
+          error: 'unknown_method',
+          method,
+          code: -32601,
+          _meta: META,
+        };
       }
     }
   }
@@ -258,15 +263,15 @@ export class GoodVibesExtensions {
 
   private _analytics(params?: unknown): unknown {
     // Try to get the analytics engine from the registry (L3 plugin).
-    // If not registered, return zero values.
+    // If not registered, return KB-08 compliant zero values.
     const analyticsEngine = this._registry.getOptional<{
-      getDashboard(): {
-        totalTokensUsed: number;
-        budgetUtilization: Record<string, number>;
-        topTools: Array<{ toolName: string; calls: number; tokens: number }>;
-      };
-      _store: {
-        budgets: Map<string, { sessionId: string; used: number; remaining: number }>;
+      getAnalyticsResponse(
+        request?: { sessionId?: string },
+      ): {
+        tokenUsage: { input: number; output: number; total: number; budget?: number; remaining?: number };
+        turnCount: number;
+        agentCount: number;
+        duration_ms: number;
       };
     }>('analytics-engine');
 
@@ -274,42 +279,24 @@ export class GoodVibesExtensions {
 
     if (analyticsEngine === undefined) {
       return {
-        totalTokensUsed: 0,
-        activeBudgets: [],
-        topTools: [],
+        tokenUsage: { input: 0, output: 0, total: 0 },
+        turnCount: 0,
+        agentCount: 0,
+        duration_ms: 0,
         _meta: { ...META, ...(meta ?? {}) },
       };
     }
 
-    const dashboard = analyticsEngine.getDashboard();
+    // Normalise params into a GoodVibesAnalyticsRequest-compatible shape
+    const request =
+      params !== null && typeof params === 'object'
+        ? (params as { sessionId?: string })
+        : undefined;
 
-    // Build activeBudgets from the internal store
-    const activeBudgets: Array<{
-      sessionId: string;
-      used: number;
-      remaining: number;
-    }> = [];
-
-    if (analyticsEngine._store?.budgets instanceof Map) {
-      for (const budget of analyticsEngine._store.budgets.values()) {
-        activeBudgets.push({
-          sessionId: budget.sessionId,
-          used: budget.used,
-          remaining: budget.remaining,
-        });
-      }
-    }
-
-    const topTools = (dashboard.topTools ?? []).map((t) => ({
-      name: t.toolName,
-      calls: t.calls,
-      tokens: t.tokens,
-    }));
+    const response = analyticsEngine.getAnalyticsResponse(request);
 
     return {
-      totalTokensUsed: dashboard.totalTokensUsed,
-      activeBudgets,
-      topTools,
+      ...response,
       _meta: { ...META, ...(meta ?? {}) },
     };
   }

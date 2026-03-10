@@ -66,11 +66,30 @@ function makeSessions(): {
 } {
   const store = new Map<string, Record<string, unknown>>();
   const sessions = {
-    create: async (params: { sessionId: string; cwd?: string }) => {
+    create: async (params: { sessionId: string; cwd?: string; mcpServers?: unknown[] }) => {
       store.set(params.sessionId, {
         id: params.sessionId,
-        config: { mode: 'justvibes', model: 'claude-sonnet-4-6' },
+        config: {
+          mode: 'justvibes',
+          model: 'claude-sonnet-4-6',
+          cwd: params.cwd ?? '/tmp',
+          mcpServers: params.mcpServers,
+        },
       });
+    },
+    load: async (
+      sessionId: string,
+      params?: { cwd?: string; mcpServers?: unknown[] },
+    ) => {
+      const existing = store.get(sessionId);
+      if (!existing) throw new Error(`Session not found: ${sessionId}`);
+      // Apply overrides when provided
+      const config = { ...(existing.config as Record<string, unknown>) };
+      if (params?.cwd !== undefined) config.cwd = params.cwd;
+      if (params?.mcpServers !== undefined) config.mcpServers = params.mcpServers;
+      const updated = { ...existing, config };
+      store.set(sessionId, updated);
+      return { context: updated, history: [] };
     },
     addHistory: async (_sessionId: string, _entry: unknown) => {},
     get: async (sessionId: string) => store.get(sessionId) ?? null,
@@ -234,6 +253,178 @@ describe('GoodVibesAgent', () => {
   });
 
   // -------------------------------------------------------------------------
+  // loadSession()
+  // -------------------------------------------------------------------------
+
+  describe('loadSession()', () => {
+    it('throws when session does not exist', async () => {
+      const { sessions } = makeSessions();
+      const { conn: promptConn } = makeConn();
+      const agent = new GoodVibesAgent(
+        promptConn,
+        makeRegistry(),
+        makeEventBus(),
+        sessions,
+        makeWrfc() as unknown as Parameters<typeof GoodVibesAgent.prototype.constructor>[4],
+      );
+
+      await expect(
+        agent.loadSession({ sessionId: 'nonexistent' } as schema.LoadSessionRequest),
+      ).rejects.toMatchObject({ code: -32000 });
+    });
+
+    it('returns configOptions in the response', async () => {
+      const { sessions } = makeSessions();
+      const { conn: promptConn } = makeConn();
+      const agent = new GoodVibesAgent(
+        promptConn,
+        makeRegistry(),
+        makeEventBus(),
+        sessions,
+        makeWrfc() as unknown as Parameters<typeof GoodVibesAgent.prototype.constructor>[4],
+      );
+
+      const nsResult = await agent.newSession({ cwd: '/tmp' } as schema.NewSessionRequest);
+      const result = await agent.loadSession({
+        sessionId: nsResult.sessionId,
+      } as schema.LoadSessionRequest);
+
+      expect(Array.isArray(result.configOptions)).toBe(true);
+      expect(result.configOptions.length).toBeGreaterThan(0);
+    });
+
+    // ISS-004: loadSession must pass params.cwd and params.mcpServers to sessions.load()
+    it('passes params.cwd to sessions.load() and updates stored context', async () => {
+      const { sessions, store } = makeSessions();
+      const { conn: promptConn } = makeConn();
+      const agent = new GoodVibesAgent(
+        promptConn,
+        makeRegistry(),
+        makeEventBus(),
+        sessions,
+        makeWrfc() as unknown as Parameters<typeof GoodVibesAgent.prototype.constructor>[4],
+      );
+
+      const nsResult = await agent.newSession({ cwd: '/original' } as schema.NewSessionRequest);
+      await agent.loadSession({
+        sessionId: nsResult.sessionId,
+        cwd: '/updated-cwd',
+      } as unknown as schema.LoadSessionRequest);
+
+      const stored = store.get(nsResult.sessionId);
+      const config = stored?.config as Record<string, unknown>;
+      expect(config?.cwd).toBe('/updated-cwd');
+    });
+
+    it('passes params.mcpServers to sessions.load() and updates stored context', async () => {
+      const { sessions, store } = makeSessions();
+      const { conn: promptConn } = makeConn();
+      const agent = new GoodVibesAgent(
+        promptConn,
+        makeRegistry(),
+        makeEventBus(),
+        sessions,
+        makeWrfc() as unknown as Parameters<typeof GoodVibesAgent.prototype.constructor>[4],
+      );
+
+      const nsResult = await agent.newSession({ cwd: '/tmp' } as schema.NewSessionRequest);
+      const newServers = [{ id: 'srv-new', uri: 'http://localhost:4000' }];
+      await agent.loadSession({
+        sessionId: nsResult.sessionId,
+        mcpServers: newServers,
+      } as unknown as schema.LoadSessionRequest);
+
+      const stored = store.get(nsResult.sessionId);
+      const config = stored?.config as Record<string, unknown>;
+      expect(config?.mcpServers).toEqual(newServers);
+    });
+
+    it('calls mcpBridge.connectServers with params.mcpServers (not stored) when both differ', async () => {
+      const { sessions } = makeSessions();
+      const { conn: promptConn } = makeConn();
+      const { bridge, calls } = makeMcpBridge([{ serverId: 'new-srv' }]);
+      const agent = new GoodVibesAgent(
+        promptConn,
+        makeRegistry(),
+        makeEventBus(),
+        sessions,
+        makeWrfc() as unknown as Parameters<typeof GoodVibesAgent.prototype.constructor>[4],
+        bridge as unknown as Parameters<typeof GoodVibesAgent.prototype.constructor>[5],
+      );
+
+      // Create session with no stored MCP servers
+      const nsResult = await agent.newSession({ cwd: '/tmp' } as schema.NewSessionRequest);
+
+      // Load with new mcpServers in the request
+      const requestServers = [{ id: 'req-srv', uri: 'http://localhost:5000' }];
+      await agent.loadSession({
+        sessionId: nsResult.sessionId,
+        mcpServers: requestServers,
+      } as unknown as schema.LoadSessionRequest);
+
+      // mcpBridge should be called with the request-level servers (via updated context)
+      expect(calls).toHaveLength(1);
+      expect((calls[0] as Array<{ id: string }>)[0].id).toBe('req-srv');
+    });
+
+    it('falls back to stored mcpServers when params.mcpServers is not provided', async () => {
+      const { sessions } = makeSessions();
+      const { conn: promptConn } = makeConn();
+      const { bridge, calls } = makeMcpBridge([{ serverId: 'stored-srv' }]);
+      const agent = new GoodVibesAgent(
+        promptConn,
+        makeRegistry(),
+        makeEventBus(),
+        sessions,
+        makeWrfc() as unknown as Parameters<typeof GoodVibesAgent.prototype.constructor>[4],
+        bridge as unknown as Parameters<typeof GoodVibesAgent.prototype.constructor>[5],
+      );
+
+      // Create session WITH stored MCP servers
+      const storedServers = [{ id: 'stored-srv', uri: 'http://localhost:3001' }];
+      const nsResult = await agent.newSession({
+        cwd: '/tmp',
+        mcpServers: storedServers,
+      } as unknown as schema.NewSessionRequest);
+
+      // Load WITHOUT providing mcpServers in request
+      await agent.loadSession({
+        sessionId: nsResult.sessionId,
+      } as schema.LoadSessionRequest);
+
+      // mcpBridge should be called with the stored servers (fallback)
+      expect(calls.length).toBeGreaterThanOrEqual(1); // once in newSession, once in loadSession
+      const lastCall = calls[calls.length - 1] as Array<{ id: string }>;
+      expect(lastCall[0].id).toBe('stored-srv');
+    });
+
+    it('does not call mcpBridge when session has no mcpServers', async () => {
+      const { sessions } = makeSessions();
+      const { conn: promptConn } = makeConn();
+      const { bridge, calls } = makeMcpBridge();
+      const agent = new GoodVibesAgent(
+        promptConn,
+        makeRegistry(),
+        makeEventBus(),
+        sessions,
+        makeWrfc() as unknown as Parameters<typeof GoodVibesAgent.prototype.constructor>[4],
+        bridge as unknown as Parameters<typeof GoodVibesAgent.prototype.constructor>[5],
+      );
+
+      // Create session WITHOUT any MCP servers
+      const nsResult = await agent.newSession({ cwd: '/tmp' } as schema.NewSessionRequest);
+
+      // Load WITHOUT providing mcpServers
+      await agent.loadSession({
+        sessionId: nsResult.sessionId,
+      } as schema.LoadSessionRequest);
+
+      // No MCP calls should have been made (create had no servers, load has no servers)
+      expect(calls).toHaveLength(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // prompt()
   // -------------------------------------------------------------------------
 
@@ -339,15 +530,19 @@ describe('GoodVibesAgent', () => {
 
       const nsResult = await agent.newSession({ cwd: '/tmp' } as schema.NewSessionRequest);
 
-      await agent.prompt({
+      const result = await agent.prompt({
         sessionId: nsResult.sessionId,
         prompt: [{ type: 'text', text: 'Do work' }],
       } as schema.PromptRequest);
 
-      const finishUpdate = updates.find(
-        (u) => (u.update as Record<string, unknown>)?.sessionUpdate === 'finish',
+      // ISS-103: 'finish' sessionUpdate was removed from the spec.
+      // Completion is signalled by the stopReason in the PromptResponse
+      // and an agent_message_chunk with the task summary.
+      expect(result.stopReason).toBe('end_turn');
+      const msgUpdate = updates.find(
+        (u) => (u.update as Record<string, unknown>)?.sessionUpdate === 'agent_message_chunk',
       );
-      expect(finishUpdate).toBeDefined();
+      expect(msgUpdate).toBeDefined();
     });
 
     it('returns stopReason: cancelled when controller is aborted during run', async () => {
@@ -390,7 +585,7 @@ describe('GoodVibesAgent', () => {
     });
 
     it('handles wrfc errors and streams an error message', async () => {
-      const { conn: promptConn, updates } = makeConn();
+      const { conn: promptConn } = makeConn();
       const { sessions } = makeSessions();
 
       const wrfc = {
@@ -407,19 +602,13 @@ describe('GoodVibesAgent', () => {
 
       const nsResult = await agent.newSession({ cwd: '/tmp' } as schema.NewSessionRequest);
 
-      const response = await agent.prompt({
-        sessionId: nsResult.sessionId,
-        prompt: [{ type: 'text', text: 'Do work' }],
-      } as schema.PromptRequest);
-
-      expect(response.stopReason).toBe('end_turn');
-
-      const errUpdate = updates.find(
-        (u) =>
-          (u.update as Record<string, unknown>)?.sessionUpdate === 'agent_message_chunk' &&
-          ((u.update as Record<string, unknown>).content as { text: string }).text.includes('Error'),
-      );
-      expect(errUpdate).toBeDefined();
+      // ISS-084: Internal errors propagate as JSON-RPC errors, not disguised as end_turn.
+      await expect(
+        agent.prompt({
+          sessionId: nsResult.sessionId,
+          prompt: [{ type: 'text', text: 'Do work' }],
+        } as schema.PromptRequest),
+      ).rejects.toMatchObject({ code: -32603 });
     });
   });
 

@@ -86,4 +86,24 @@ export class ToolCallEmitter {
       update: { sessionUpdate: 'tool_call_update', ...update } as acp.SessionUpdate,
     });
   }
+
+  /**
+   * Emit an agent_thought_chunk session update to stream agent thinking/reasoning
+   * content to the client.
+   *
+   * Per ACP prompt-turn spec, this allows clients to display the agent's
+   * extended thinking in real time during LLM inference.
+   *
+   * @param sessionId - ACP session ID
+   * @param text      - Thinking text delta
+   */
+  async emitThoughtChunk(sessionId: string, text: string): Promise<void> {
+    await this.conn.sessionUpdate({
+      sessionId,
+      update: {
+        sessionUpdate: 'agent_thought_chunk',
+        content: { type: 'text', text },
+      } as acp.SessionUpdate,
+    });
+  }
 }

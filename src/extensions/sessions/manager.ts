@@ -38,7 +38,7 @@ const HISTORY_PREFIX = 'history:';
 
 /** Permitted lifecycle transitions per state */
 const ALLOWED_TRANSITIONS: Readonly<Record<SessionState, SessionState[]>> = {
-  idle: ['active'],
+  idle: ['active', 'completed', 'cancelled'],
   active: ['idle', 'cancelled', 'completed'],
   cancelled: [],
   completed: [],
@@ -115,16 +115,34 @@ export class SessionManager {
    * Load an existing session by ID.
    * Throws if the session does not exist.
    *
+   * When `params.cwd` or `params.mcpServers` are provided, the stored session
+   * context is updated with those values before returning. This implements
+   * ISS-004 / ISS-019: `session/load` must honour request-level overrides.
+   *
    * TODO(ISS-123): History replay is missing `_goodvibes/phase: 'replay'` marker.
    * When replaying history messages into the agent loop, each replayed message
    * should include `_goodvibes: { phase: 'replay' }` in its metadata so the
    * agent can distinguish replay from live input. This marker lives in agent.ts
    * at the point where history is replayed into the agent loop.
    */
-  async load(sessionId: string): Promise<{ context: SessionContext; history: HistoryMessage[] }> {
-    const stored = this._store.get<StoredContext>(NS, sessionId);
+  async load(
+    sessionId: string,
+    params?: { cwd?: string; mcpServers?: MCPServerConfig[] },
+  ): Promise<{ context: SessionContext; history: HistoryMessage[] }> {
+    let stored = this._store.get<StoredContext>(NS, sessionId);
     if (!stored) {
       throw new Error(`Session not found: ${sessionId}`);
+    }
+
+    // ISS-019: Update stored context when request overrides are present.
+    if (params?.cwd !== undefined || params?.mcpServers !== undefined) {
+      const updatedConfig: SessionContext['config'] = {
+        ...stored.config,
+        ...(params.cwd !== undefined ? { cwd: params.cwd } : {}),
+        ...(params.mcpServers !== undefined ? { mcpServers: params.mcpServers } : {}),
+      };
+      stored = { ...stored, config: updatedConfig, updatedAt: Date.now() };
+      this._store.set(NS, sessionId, stored);
     }
 
     const history = this._store.get<HistoryMessage[]>(NS, `${HISTORY_PREFIX}${sessionId}`) ?? [];
@@ -175,10 +193,26 @@ export class SessionManager {
         cwd: stored.config.cwd,
         createdAt: stored.createdAt,
         updatedAt: stored.updatedAt,
+        ...(stored.title !== undefined ? { title: stored.title } : {}),
       });
     }
 
     return summaries;
+  }
+
+  // -------------------------------------------------------------------------
+  // setTitle
+  // -------------------------------------------------------------------------
+
+  /**
+   * Set the title of a session.
+   * A no-op if the session does not exist.
+   */
+  async setTitle(sessionId: string, title: string): Promise<void> {
+    const stored = this._store.get<StoredContext>(NS, sessionId);
+    if (!stored) return;
+    this._store.set(NS, sessionId, { ...stored, title, updatedAt: Date.now() });
+    this._bus.emit('session:title-set', { sessionId, title });
   }
 
   // -------------------------------------------------------------------------
@@ -338,7 +372,24 @@ export class SessionManager {
 
     // Touch updatedAt on the context
     const stored = this._store.get<StoredContext>(NS, sessionId)!;
-    this._store.set(NS, sessionId, { ...stored, updatedAt: Date.now() });
+    const updatedStored: StoredContext = { ...stored, updatedAt: Date.now() };
+
+    // Auto-generate title from the first user message (first 100 chars, trimmed)
+    if (message.role === 'user' && stored.title === undefined) {
+      const text =
+        typeof message.content === 'string'
+          ? message.content
+          : message.content
+              .filter((b): b is { type: 'text'; text: string } => b.type === 'text' && typeof (b as { text?: unknown }).text === 'string')
+              .map((b) => (b as { type: 'text'; text: string }).text)
+              .join(' ');
+      const trimmed = text.trim();
+      if (trimmed.length > 0) {
+        updatedStored.title = trimmed.slice(0, 100);
+      }
+    }
+
+    this._store.set(NS, sessionId, updatedStored);
   }
 
   // -------------------------------------------------------------------------

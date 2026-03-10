@@ -14,8 +14,14 @@
 
 import type { EventBus } from '../../core/event-bus.js';
 import type { ToolDefinition } from '../../types/registry.js';
-import type { McpServer, McpServerStdio } from '@agentclientprotocol/sdk';
-import { McpClient, createMcpStdioTransport, type McpToolDef } from './transport.js';
+import type { McpServer, McpServerStdio, McpServerHttp } from '@agentclientprotocol/sdk';
+import {
+  McpClient,
+  McpHttpClient,
+  createMcpStdioTransport,
+  createMcpHttpTransport,
+  type McpToolDef,
+} from './transport.js';
 
 // ---------------------------------------------------------------------------
 // McpConnection
@@ -28,7 +34,7 @@ export type McpConnection = {
   /** Tools discovered from this server */
   tools: ToolDefinition[];
   /** The underlying client (internal use by bridge) */
-  client: McpClient;
+  client: McpClient | McpHttpClient;
 };
 
 // ---------------------------------------------------------------------------
@@ -205,11 +211,9 @@ export class McpBridge {
     }
   }
 
-  private _createClient(server: McpServer): McpClient | null {
-    // Only stdio is supported in the baseline implementation.
-    // HTTP/SSE transports require additional dependencies not yet available.
+  private _createClient(server: McpServer): McpClient | McpHttpClient | null {
     if ('command' in server) {
-      // McpServerStdio
+      // McpServerStdio — discriminated by presence of `command` field
       const stdio = server as McpServerStdio;
       /**
        * ACP SDK defines McpServerStdio.env as EnvVariable[] ({ name, value }[]).
@@ -228,21 +232,29 @@ export class McpBridge {
       });
     }
 
-    // HTTP/SSE: not supported yet — log a warning and skip gracefully.
-    //
-    // @limitation Only stdio MCP servers are supported in this implementation.
-    //   HTTP and SSE transports are silently skipped (ISS-072). The ACP client
-    //   receives no structured notification about the skipped server.
-    //
-    //   Future work:
-    //   1. Emit an `mcp:error` event so the session layer can notify the ACP client.
-    //
-    // NOTE (ISS-007 resolved): `mcpCapabilities: { http: false, sse: false }` is
-    // declared in agentCapabilities in src/extensions/acp/agent.ts — done.
+    if ('type' in server && server.type === 'http') {
+      // McpServerHttp — JSON-RPC 2.0 over HTTP POST
+      const http = server as McpServerHttp & { type: 'http' };
+      /**
+       * ACP SDK defines McpServerHttp.headers as HttpHeader[] ({ name, value }[]).
+       * createMcpHttpTransport expects a plain Record<string, string> — convert here.
+       */
+      const headers: Record<string, string> = {};
+      for (const h of http.headers ?? []) {
+        headers[h.name] = h.value;
+      }
+      return createMcpHttpTransport({
+        name: http.name,
+        url: http.url,
+        headers,
+      });
+    }
+
+    // SSE transport: not yet supported — log a warning and skip gracefully.
     // NOTE: console.error is intentional here — this runs during MCP bridge bootstrap,
     // before a structured logger is available.
-    console.error(`[MCP] Skipping non-stdio server "${server.name}": HTTP/SSE transport not yet supported`);
-    this.eventBus.emit('mcp:error', { serverId: server.name, error: 'HTTP/SSE transport not supported' });
+    console.error(`[MCP] Skipping server "${server.name}": SSE transport not yet supported`);
+    this.eventBus.emit('mcp:error', { serverId: server.name, error: 'SSE transport not supported' });
     return null;
   }
 

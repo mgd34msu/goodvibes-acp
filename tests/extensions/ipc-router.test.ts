@@ -17,23 +17,23 @@ describe('IpcRouter', () => {
   // ---------------------------------------------------------------------------
 
   describe('built-in ping handler', () => {
-    it('responds ok=true with pong:true and echoes the payload', async () => {
+    it('responds with result.pong=true and echoes the params', async () => {
       const req = buildRequest('ping-1', 'ping', { hello: 'world' });
       const resp = await router.route(req);
 
-      expect(resp.ok).toBe(true);
-      expect(resp.correlationId).toBe('ping-1');
-      const result = resp.payload as { pong: boolean; echo: unknown };
+      expect(resp.error).toBeUndefined();
+      expect(resp.id).toBe('ping-1');
+      const result = resp.result as { pong: boolean; echo: unknown };
       expect(result.pong).toBe(true);
       expect(result.echo).toEqual({ hello: 'world' });
     });
 
-    it('ping with null payload echoes null', async () => {
+    it('ping with null params echoes null', async () => {
       const req = buildRequest('ping-null', 'ping', null);
       const resp = await router.route(req);
 
-      expect(resp.ok).toBe(true);
-      const result = resp.payload as { echo: unknown };
+      expect(resp.error).toBeUndefined();
+      const result = resp.result as { echo: unknown };
       expect(result.echo).toBeNull();
     });
   });
@@ -43,12 +43,12 @@ describe('IpcRouter', () => {
   // ---------------------------------------------------------------------------
 
   describe('built-in status handler', () => {
-    it('responds ok=true with a status snapshot containing expected fields', async () => {
+    it('responds with a status snapshot containing expected fields', async () => {
       const req = buildRequest('status-1', 'status');
       const resp = await router.route(req);
 
-      expect(resp.ok).toBe(true);
-      const result = resp.payload as Record<string, unknown>;
+      expect(resp.error).toBeUndefined();
+      const result = resp.result as Record<string, unknown>;
       expect(typeof result.pid).toBe('number');
       expect(typeof result.uptime).toBe('number');
       expect(result.memoryUsage).toBeDefined();
@@ -62,13 +62,13 @@ describe('IpcRouter', () => {
   // ---------------------------------------------------------------------------
 
   describe('unknown method', () => {
-    it('returns ok=false with error message for unregistered method', async () => {
+    it('returns an error response for unregistered method', async () => {
       const req = buildRequest('u-1', 'nonexistent-method');
       const resp = await router.route(req);
 
-      expect(resp.ok).toBe(false);
-      expect(resp.error).toContain('Unknown method: nonexistent-method');
-      expect(resp.correlationId).toBe('u-1');
+      expect(resp.error).toBeDefined();
+      expect(resp.error!.message).toContain('Unknown method: nonexistent-method');
+      expect(resp.id).toBe('u-1');
     });
   });
 
@@ -78,13 +78,13 @@ describe('IpcRouter', () => {
 
   describe('register', () => {
     it('registers and routes to a custom handler', async () => {
-      router.register('echo', (req) => ({ echo: req.payload, reversed: true }));
+      router.register('echo', (req) => ({ echo: req.params, reversed: true }));
 
       const req = buildRequest('echo-1', 'echo', { msg: 'hello' });
       const resp = await router.route(req);
 
-      expect(resp.ok).toBe(true);
-      const result = resp.payload as { echo: unknown; reversed: boolean };
+      expect(resp.error).toBeUndefined();
+      const result = resp.result as { echo: unknown; reversed: boolean };
       expect(result.echo).toEqual({ msg: 'hello' });
       expect(result.reversed).toBe(true);
     });
@@ -96,8 +96,8 @@ describe('IpcRouter', () => {
       const req = buildRequest('ow-1', 'echo');
       const resp = await router.route(req);
 
-      expect(resp.ok).toBe(true);
-      expect(resp.payload).toBe('second');
+      expect(resp.error).toBeUndefined();
+      expect(resp.result).toBe('second');
     });
 
     it('can overwrite a built-in handler', async () => {
@@ -106,8 +106,8 @@ describe('IpcRouter', () => {
       const req = buildRequest('bip-1', 'ping');
       const resp = await router.route(req);
 
-      expect(resp.ok).toBe(true);
-      const result = resp.payload as { overridden: boolean };
+      expect(resp.error).toBeUndefined();
+      const result = resp.result as { overridden: boolean };
       expect(result.overridden).toBe(true);
     });
   });
@@ -117,7 +117,7 @@ describe('IpcRouter', () => {
   // ---------------------------------------------------------------------------
 
   describe('handler error handling', () => {
-    it('captures handler throws and returns ok=false with error message', async () => {
+    it('captures handler throws and returns error response with message', async () => {
       router.register('explode', () => {
         throw new Error('handler crashed');
       });
@@ -125,12 +125,12 @@ describe('IpcRouter', () => {
       const req = buildRequest('err-1', 'explode');
       const resp = await router.route(req);
 
-      expect(resp.ok).toBe(false);
-      expect(resp.error).toBe('handler crashed');
-      expect(resp.correlationId).toBe('err-1');
+      expect(resp.error).toBeDefined();
+      expect(resp.error!.message).toBe('handler crashed');
+      expect(resp.id).toBe('err-1');
     });
 
-    it('captures async handler rejections and returns ok=false', async () => {
+    it('captures async handler rejections and returns error response', async () => {
       router.register('async-fail', async () => {
         throw new Error('async crash');
       });
@@ -138,8 +138,8 @@ describe('IpcRouter', () => {
       const req = buildRequest('af-1', 'async-fail');
       const resp = await router.route(req);
 
-      expect(resp.ok).toBe(false);
-      expect(resp.error).toBe('async crash');
+      expect(resp.error).toBeDefined();
+      expect(resp.error!.message).toBe('async crash');
     });
   });
 
@@ -148,21 +148,21 @@ describe('IpcRouter', () => {
   // ---------------------------------------------------------------------------
 
   describe('response structure', () => {
-    it('every response has type=response, an id, correlationId, ok, timestamp', async () => {
+    it('every response has type=response, an id, and jsonrpc=2.0', async () => {
       const req = buildRequest('struct-1', 'ping');
       const resp = await router.route(req);
 
       expect(resp.type).toBe('response');
-      expect(typeof resp.id).toBe('string');
-      expect(resp.correlationId).toBe('struct-1');
-      expect(typeof resp.ok).toBe('boolean');
-      expect(typeof resp.timestamp).toBe('number');
+      expect(resp.jsonrpc).toBe('2.0');
+      expect(resp.id).toBe('struct-1');
+      expect(resp.result).toBeDefined();
     });
 
-    it('successive responses have different ids', async () => {
+    it('successive responses carry the corresponding request id', async () => {
       const r1 = await router.route(buildRequest('a', 'ping'));
       const r2 = await router.route(buildRequest('b', 'ping'));
-      expect(r1.id).not.toBe(r2.id);
+      expect(r1.id).toBe('a');
+      expect(r2.id).toBe('b');
     });
   });
 });

@@ -208,16 +208,16 @@ describe('IpcSocketServer', () => {
 
       const response = deserializeMessage(line) as {
         type: string;
-        ok: boolean;
-        correlationId: string;
-        payload: { pong: boolean; echo: unknown };
+        id: string;
+        result: { pong: boolean; echo: unknown };
+        error?: unknown;
       };
 
       expect(response.type).toBe('response');
-      expect(response.ok).toBe(true);
-      expect(response.correlationId).toBe('req-1');
-      expect(response.payload.pong).toBe(true);
-      expect(response.payload.echo).toEqual({ hello: 'world' });
+      expect(response.error).toBeUndefined();
+      expect(response.id).toBe('req-1');
+      expect(response.result.pong).toBe(true);
+      expect(response.result.echo).toEqual({ hello: 'world' });
     });
 
     it('routes a status request and returns process info', async () => {
@@ -227,13 +227,13 @@ describe('IpcSocketServer', () => {
       const line = await clientRoundTrip(socketPath, request);
 
       const response = deserializeMessage(line) as {
-        ok: boolean;
-        payload: Record<string, unknown>;
+        error?: unknown;
+        result: Record<string, unknown>;
       };
 
-      expect(response.ok).toBe(true);
-      expect(typeof response.payload.pid).toBe('number');
-      expect(typeof response.payload.uptime).toBe('number');
+      expect(response.error).toBeUndefined();
+      expect(typeof response.result.pid).toBe('number');
+      expect(typeof response.result.uptime).toBe('number');
     });
 
     it('returns an error response for an unknown method', async () => {
@@ -243,14 +243,13 @@ describe('IpcSocketServer', () => {
       const line = await clientRoundTrip(socketPath, request);
 
       const response = deserializeMessage(line) as {
-        ok: boolean;
-        error: string;
-        correlationId: string;
+        error: { message: string };
+        id: string;
       };
 
-      expect(response.ok).toBe(false);
-      expect(response.error).toContain('Unknown method');
-      expect(response.correlationId).toBe('unknown-1');
+      expect(response.error).toBeDefined();
+      expect(response.error.message).toContain('Unknown method');
+      expect(response.id).toBe('unknown-1');
     });
 
     it('returns a parse error response for a malformed message object', async () => {
@@ -279,13 +278,12 @@ describe('IpcSocketServer', () => {
       });
 
       const response = deserializeMessage(line) as {
-        ok: boolean;
-        error: string;
+        error: { message: string };
       };
 
-      expect(response.ok).toBe(false);
-      expect(typeof response.error).toBe('string');
-      expect(response.error.length).toBeGreaterThan(0);
+      expect(response.error).toBeDefined();
+      expect(typeof response.error.message).toBe('string');
+      expect(response.error.message.length).toBeGreaterThan(0);
     });
 
     it('emits ipc:message on the event bus for each received message', async () => {
@@ -307,7 +305,7 @@ describe('IpcSocketServer', () => {
 
       await new Promise<void>((resolve, reject) => {
         const sock: Socket = connect(socketPath, () => {
-          const notif = buildNotification('n-1', 'runtime:test', { ok: true });
+          const notif = buildNotification('runtime:test', { ok: true });
           sock.write(serializeMessage(notif));
 
           // Wait briefly; no data should arrive since notifications are fire-and-forget
@@ -324,7 +322,7 @@ describe('IpcSocketServer', () => {
     });
 
     it('routes a custom registered handler through the socket', async () => {
-      router.register('echo', (req) => ({ echoed: req.payload }));
+      router.register('echo', (req) => ({ echoed: req.params }));
 
       await server.start(socketPath);
 
@@ -332,12 +330,12 @@ describe('IpcSocketServer', () => {
       const line = await clientRoundTrip(socketPath, request);
 
       const response = deserializeMessage(line) as {
-        ok: boolean;
-        payload: { echoed: unknown };
+        error?: unknown;
+        result: { echoed: unknown };
       };
 
-      expect(response.ok).toBe(true);
-      expect(response.payload.echoed).toEqual({ data: 42 });
+      expect(response.error).toBeUndefined();
+      expect(response.result.echoed).toEqual({ data: 42 });
     });
   });
 });

@@ -124,6 +124,22 @@ export class StateMachine<TState extends string, TContext> {
   private readonly _exitHandlers = new Map<TState, Set<StateExitHandler<TContext>>>();
   private readonly _historyLimit: number;
 
+  /**
+   * Safely invoke a hook function, suppressing and logging any errors.
+   * If the hook returns a Promise, attaches a rejection handler.
+   * If the hook throws synchronously, catches and logs the error.
+   *
+   * @param fn - Hook function to invoke
+   */
+  private _safeRunHook(fn: () => void | Promise<void>): void {
+    try {
+      const result = fn();
+      if (result instanceof Promise) {
+        result.catch((err: unknown) => { console.error('[StateMachine] hook error:', err); });
+      }
+    } catch (err: unknown) { console.error('[StateMachine] hook error:', err); }
+  }
+
   constructor(config: StateMachineConfig<TState, TContext>) {
     this._config = config;
     this._current = config.initial;
@@ -156,25 +172,15 @@ export class StateMachine<TState extends string, TContext> {
       // Run onExit for current state
       const exitConfig = this._config.states[this._current];
       if (exitConfig?.onExit) {
-        try {
-          const result = exitConfig.onExit(this._context, t.to);
-          // Sync — we don't await hooks to keep transition atomic
-          if (result instanceof Promise) {
-            result.catch((err: unknown) => { console.error('[StateMachine] hook error:', err); });
-          }
-        } catch (err: unknown) { console.error('[StateMachine] hook error:', err); }
+        // Sync — we don't await hooks to keep transition atomic
+        this._safeRunHook(() => exitConfig.onExit!(this._context, t.to));
       }
 
       // Fire exit handlers
       const exitHandlers = this._exitHandlers.get(this._current);
       if (exitHandlers) {
         for (const handler of exitHandlers) {
-          try {
-            const result = handler(t.to, this._context);
-            if (result instanceof Promise) {
-              result.catch((err: unknown) => { console.error('[StateMachine] hook error:', err); });
-            }
-          } catch (err: unknown) { console.error('[StateMachine] hook error:', err); }
+          this._safeRunHook(() => handler(t.to, this._context));
         }
       }
 
@@ -184,24 +190,14 @@ export class StateMachine<TState extends string, TContext> {
       // Run onEnter for new state
       const enterConfig = this._config.states[this._current];
       if (enterConfig?.onEnter) {
-        try {
-          const result = enterConfig.onEnter(this._context, from);
-          if (result instanceof Promise) {
-            result.catch((err: unknown) => { console.error('[StateMachine] hook error:', err); });
-          }
-        } catch (err: unknown) { console.error('[StateMachine] hook error:', err); }
+        this._safeRunHook(() => enterConfig.onEnter!(this._context, from));
       }
 
       // Fire enter handlers
       const enterHandlers = this._enterHandlers.get(this._current);
       if (enterHandlers) {
         for (const handler of enterHandlers) {
-          try {
-            const result = handler(from, this._context);
-            if (result instanceof Promise) {
-              result.catch((err: unknown) => { console.error('[StateMachine] hook error:', err); });
-            }
-          } catch (err: unknown) { console.error('[StateMachine] hook error:', err); }
+          this._safeRunHook(() => handler(from, this._context));
         }
       }
 
@@ -219,12 +215,7 @@ export class StateMachine<TState extends string, TContext> {
 
       // Notify transition handlers
       for (const handler of this._transitionHandlers) {
-        try {
-          const result = handler(record, this._context);
-          if (result instanceof Promise) {
-            result.catch((err: unknown) => { console.error('[StateMachine] hook error:', err); });
-          }
-        } catch (err: unknown) { console.error('[StateMachine] hook error:', err); }
+        this._safeRunHook(() => handler(record, this._context));
       }
 
       return true;

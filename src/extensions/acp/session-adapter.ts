@@ -175,6 +175,7 @@ export class SessionAdapter {
 
     // ISS-069: KB-03 SHOULD — emit dual config_option_update for backwards
     // compatibility so clients relying on config_option_update also see the change.
+    // Intentional: session may not exist yet at the time of mode-changed event — undefined is the safe fallback
     const context = await this.sessions.get(sessionId).catch(() => undefined);
     if (context) {
       const { configOptions: storedOptions, model } = context.config;
@@ -194,6 +195,7 @@ export class SessionAdapter {
   }): Promise<void> {
     const { sessionId } = payload;
 
+    // Intentional: session may not exist yet at the time of config-changed event — undefined is the safe fallback
     const context = await this.sessions.get(sessionId).catch(() => undefined);
     if (!context) return;
 

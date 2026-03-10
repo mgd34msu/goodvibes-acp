@@ -15,7 +15,9 @@ import { createServer as createTcpServer } from 'node:net';
 import type { Server as TcpServer, Socket } from 'node:net';
 import { writeFile, unlink } from 'node:fs/promises';
 import { EventBus } from '../../core/event-bus.js';
-import { RUNTIME_VERSION } from '../../types/constants.js';
+import { RUNTIME_VERSION, ACP_PROTOCOL_VERSION } from '../../types/constants.js';
+import { HealthCheck } from './health.js';
+import type { HealthStatus } from './health.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -36,6 +38,12 @@ export interface DaemonOptions {
    * Use this in main.ts to wire the ACP transport for daemon mode.
    */
   onConnection?: (socket: Socket) => void;
+  /**
+   * Optional HealthCheck instance to integrate with the /health endpoint.
+   * When provided, the /health response reflects real health status and
+   * returns 503 for degraded or unhealthy states.
+   */
+  healthCheck?: HealthCheck;
 }
 
 // ---------------------------------------------------------------------------
@@ -55,6 +63,7 @@ async function handleHealthRequest(
   req: IncomingMessage,
   res: ServerResponse,
   isReady: boolean,
+  healthCheck?: HealthCheck,
 ): Promise<void> {
   const url = req.url ?? '/';
 
@@ -64,12 +73,28 @@ async function handleHealthRequest(
   }
 
   if (url === '/health') {
-    sendJson(res, 200, {
-      status: 'ok',
-      pid: process.pid,
-      timestamp: Date.now(),
-      agent: { name: 'goodvibes', version: RUNTIME_VERSION, protocolVersion: 1 },
-    });
+    if (healthCheck) {
+      const snapshot: HealthStatus = healthCheck.check();
+      // Map health status to HTTP status code:
+      // healthy (starting/ready) → 200, degraded/shutting_down → 503
+      const httpStatus =
+        snapshot.status === 'ready' || snapshot.status === 'starting' ? 200 : 503;
+      sendJson(res, httpStatus, {
+        status: snapshot.status,
+        pid: process.pid,
+        timestamp: Date.now(),
+        uptime: snapshot.uptime,
+        checks: snapshot.checks,
+        agent: { name: 'goodvibes', version: RUNTIME_VERSION, protocolVersion: ACP_PROTOCOL_VERSION },
+      });
+    } else {
+      sendJson(res, 200, {
+        status: 'ok',
+        pid: process.pid,
+        timestamp: Date.now(),
+        agent: { name: 'goodvibes', version: RUNTIME_VERSION, protocolVersion: ACP_PROTOCOL_VERSION },
+      });
+    }
     return;
   }
 
@@ -114,6 +139,7 @@ export class DaemonManager {
   private _options: DaemonOptions | null = null;
   private _running = false;
   private _ready = false;
+  private _healthCheck: HealthCheck | null = null;
 
   constructor(eventBus: EventBus) {
     this._eventBus = eventBus;
@@ -145,6 +171,9 @@ export class DaemonManager {
       await writeFile(options.pidFile, String(process.pid), 'utf-8');
     }
 
+    // Store healthCheck reference for use in the health endpoint
+    this._healthCheck = options.healthCheck ?? null;
+
     // Start TCP and health servers; clean up PID file on failure (ISS-031)
     try {
       // Start TCP listener for ACP connections
@@ -155,7 +184,9 @@ export class DaemonManager {
     } catch (err) {
       // If either server fails to bind, remove the PID file to prevent orphans
       if (options.pidFile) {
-        await unlink(options.pidFile).catch(() => {});
+        await unlink(options.pidFile).catch(() => {
+          // Intentional: PID file may not have been created yet if writeFile failed
+        });
       }
       throw err;
     }
@@ -272,7 +303,7 @@ export class DaemonManager {
   private _startHealthServer(host: string, port: number): Promise<void> {
     return new Promise((resolve, reject) => {
       const server = createHttpServer((req: IncomingMessage, res: ServerResponse) => {
-        handleHealthRequest(req, res, this._ready).catch((err: unknown) => {
+        handleHealthRequest(req, res, this._ready, this._healthCheck ?? undefined).catch((err: unknown) => {
           const msg = err instanceof Error ? err.message : String(err);
           sendJson(res, 500, { error: msg });
         });

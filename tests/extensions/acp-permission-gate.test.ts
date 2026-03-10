@@ -15,7 +15,9 @@ function makeConn(outcomePayload: AcpOutcome = { outcome: 'selected', optionId: 
   conn: AgentSideConnection;
   requestPermissionMock: ReturnType<typeof mock>;
 } {
-  const requestPermissionMock = mock(async (_params: unknown) => ({ outcome: outcomePayload }));
+  // isGranted() receives the response directly and casts it to RequestPermissionOutcome.
+  // The SDK returns { outcome, optionId } at the top level (not wrapped in { outcome: {...} }).
+  const requestPermissionMock = mock(async (_params: unknown) => outcomePayload);
   const conn = {
     requestPermission: requestPermissionMock,
   } as unknown as AgentSideConnection;
@@ -50,7 +52,7 @@ describe('PermissionGate', () => {
 
       const result = await gate.check(makeRequest({ type: 'tool_call' }));
 
-      expect(result.status).toBe('granted');
+      expect(result.granted).toBe(true);
       expect(requestPermissionMock).not.toHaveBeenCalled();
     });
 
@@ -66,8 +68,8 @@ describe('PermissionGate', () => {
       const r1 = await gate.check(makeRequest({ type: 'file_read' }));
       const r2 = await gate.check(makeRequest({ type: 'file_write' }));
 
-      expect(r1.status).toBe('granted');
-      expect(r2.status).toBe('granted');
+      expect(r1.granted).toBe(true);
+      expect(r2.granted).toBe(true);
       expect(requestPermissionMock).not.toHaveBeenCalled();
     });
   });
@@ -88,7 +90,7 @@ describe('PermissionGate', () => {
 
       const result = await gate.check(makeRequest({ type: 'command_execute' }));
 
-      expect(result.status).toBe('denied');
+      expect(result.granted).toBe(false);
       expect(result.reason).toBe('Policy: always denied');
       expect(requestPermissionMock).not.toHaveBeenCalled();
     });
@@ -105,8 +107,8 @@ describe('PermissionGate', () => {
       const r1 = await gate.check(makeRequest({ type: 'command_execute' }));
       const r2 = await gate.check(makeRequest({ type: 'network_access' }));
 
-      expect(r1.status).toBe('denied');
-      expect(r2.status).toBe('denied');
+      expect(r1.granted).toBe(false);
+      expect(r2.granted).toBe(false);
       expect(requestPermissionMock).not.toHaveBeenCalled();
     });
   });
@@ -127,7 +129,7 @@ describe('PermissionGate', () => {
 
       const result = await gate.check(makeRequest({ type: 'network_access' }));
 
-      expect(result.status).toBe('granted');
+      expect(result.granted).toBe(true);
       expect(requestPermissionMock).not.toHaveBeenCalled();
     });
   });
@@ -208,7 +210,7 @@ describe('PermissionGate', () => {
 
       const result = await gate.check(makeRequest({ type: 'file_write' }));
 
-      expect(result.status).toBe('granted');
+      expect(result.granted).toBe(true);
     });
 
     it('returns denied when conn outcome is cancelled', async () => {
@@ -218,7 +220,7 @@ describe('PermissionGate', () => {
 
       const result = await gate.check(makeRequest({ type: 'file_write' }));
 
-      expect(result.status).toBe('denied');
+      expect(result.granted).toBe(false);
     });
 
     it('returns denied when conn outcome is selected with reject_once', async () => {
@@ -228,7 +230,7 @@ describe('PermissionGate', () => {
 
       const result = await gate.check(makeRequest({ type: 'file_write' }));
 
-      expect(result.status).toBe('denied');
+      expect(result.granted).toBe(false);
     });
 
     it('returns denied with reason when conn throws (e.g. session cancelled)', async () => {
@@ -239,7 +241,7 @@ describe('PermissionGate', () => {
 
       const result = await gate.check(makeRequest({ type: 'command_execute' }));
 
-      expect(result.status).toBe('denied');
+      expect(result.granted).toBe(false);
       expect(result.reason).toBe('Permission request failed');
     });
   });
@@ -252,7 +254,7 @@ describe('PermissionGate', () => {
     it('justvibes auto-approves all permission types', () => {
       const policy = MODE_POLICIES['justvibes']!;
       const allTypes: Array<PermissionRequest['type']> = [
-        'tool_call', 'file_read', 'file_write', 'command_execute', 'network_access',
+        'file_write', 'file_delete', 'network', 'browser', 'shell',
       ];
       for (const type of allTypes) {
         expect(policy.autoApprove).toContain(type);
@@ -261,28 +263,29 @@ describe('PermissionGate', () => {
       expect(policy.promptForUnknown).toBe(false);
     });
 
-    it('vibecoding auto-approves tool_call, file_read, file_write, command_execute but not network_access', () => {
+    it('vibecoding auto-approves file_write, file_delete, shell, _goodvibes/mcp but not network', () => {
       const policy = MODE_POLICIES['vibecoding']!;
-      expect(policy.autoApprove).toContain('tool_call');
-      expect(policy.autoApprove).toContain('file_read');
       expect(policy.autoApprove).toContain('file_write');
-      expect(policy.autoApprove).toContain('command_execute');
-      expect(policy.autoApprove).not.toContain('network_access');
+      expect(policy.autoApprove).toContain('file_delete');
+      expect(policy.autoApprove).toContain('shell');
+      expect(policy.autoApprove).toContain('_goodvibes/mcp');
+      expect(policy.autoApprove).not.toContain('network');
       expect(policy.promptForUnknown).toBe(true);
     });
 
-    it('plan auto-approves only file_read and always-denies command_execute', () => {
+    it('plan auto-approves nothing and always-denies shell and file_delete', () => {
       const policy = MODE_POLICIES['plan']!;
-      expect(policy.autoApprove).toEqual(['file_read']);
-      expect(policy.alwaysDeny).toContain('command_execute');
+      expect(policy.autoApprove).toHaveLength(0);
+      expect(policy.alwaysDeny).toContain('shell');
+      expect(policy.alwaysDeny).toContain('file_delete');
       expect(policy.promptForUnknown).toBe(true);
     });
 
-    it('sandbox auto-approves tool_call and file_read, always-denies network_access', () => {
+    it('sandbox auto-approves _goodvibes/mcp and file_write, always-denies network', () => {
       const policy = MODE_POLICIES['sandbox']!;
-      expect(policy.autoApprove).toContain('tool_call');
-      expect(policy.autoApprove).toContain('file_read');
-      expect(policy.alwaysDeny).toContain('network_access');
+      expect(policy.autoApprove).toContain('_goodvibes/mcp');
+      expect(policy.autoApprove).toContain('file_write');
+      expect(policy.alwaysDeny).toContain('network');
       expect(policy.promptForUnknown).toBe(true);
     });
 

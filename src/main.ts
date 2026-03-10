@@ -149,7 +149,7 @@ shutdownManager.register('acp-sessions',     SHUTDOWN_ORDER.L2 + 55, async () =>
   const finishUpdate = { sessionUpdate: 'finish', stopReason: 'cancelled' } as unknown as acp.SessionUpdate;
   await Promise.allSettled(
     Array.from(activeSessionConnections.entries()).map(([sessionId, sessionConn]) =>
-      sessionConn.sessionUpdate({ sessionId, update: finishUpdate }).catch(() => {}),
+      sessionConn.sessionUpdate({ sessionId, update: finishUpdate }).catch((err) => { console.error('[goodvibes-acp] acp-sessions shutdown: finish update failed for', sessionId, ':', String(err)); }),
     ),
   );
 });
@@ -167,7 +167,7 @@ AgentsPlugin.register(registry);
 // LLM + Tool providers — these enable the real AgentLoop path in AgentSpawnerPlugin
 // ---------------------------------------------------------------------------
 if (!process.env.ANTHROPIC_API_KEY) {
-  console.error('[goodvibes-acp] WARNING: ANTHROPIC_API_KEY not set — agents will run in stub mode');
+  console.error('[goodvibes-acp] WARNING: ANTHROPIC_API_KEY not set — LLM provider not registered, agent loops will fail on first call');
 } else {
   const llmProvider = new AnthropicProvider(); // reads ANTHROPIC_API_KEY from .env
   registry.register('llm-provider', llmProvider);
@@ -267,7 +267,9 @@ function createConnection(stream: AcpStream) {
       toolCallEmitters.delete(sid);
       activeSessionConnections.delete(sid);
     }
-  }).catch(() => {});
+  }).catch(() => {
+    // Intentional: conn.closed should not reject in practice; guard against unexpected rejection
+  });
 
   const sessionAdapter = new SessionAdapter(conn, sessionManager, eventBus);
   sessionAdapter.register();
@@ -303,16 +305,31 @@ async function resolveSessionCwd(sessionId: string): Promise<string | undefined>
 
 const wrfcAdapter = {
   run: async (params: { workId: string; sessionId: string; task: string; signal?: AbortSignal }) => {
+    // Tracks the last engineer agent's stop reason for ACP stop reason propagation.
+    let lastEngineerStopReason: string | undefined;
+    // Maps spawned agent handles to their configs so result() can filter by agent type.
+    const spawnedAgentConfigs = new Map<AgentHandle, AgentConfig>();
+
     const runParams: WRFCRunParams = {
       ...params,
 
       // Real spawner — delegates to the L3 AgentSpawnerPlugin via registry.
       spawner: {
         async spawn(agentConfig: AgentConfig): Promise<AgentHandle> {
-          return registry.get<IAgentSpawner>('agent-spawner')!.spawn(agentConfig);
+          const handle = await registry.get<IAgentSpawner>('agent-spawner')!.spawn(agentConfig);
+          spawnedAgentConfigs.set(handle, agentConfig);
+          return handle;
         },
         async result(handle: AgentHandle): Promise<AgentResult> {
-          return registry.get<IAgentSpawner>('agent-spawner')!.result(handle);
+          const agentResult = await registry.get<IAgentSpawner>('agent-spawner')!.result(handle);
+          // Only capture stop reason from engineer-type agents (work phase) for ACP propagation.
+          // Reviewer, fixer, and other agent types should not influence the ACP stop reason.
+          const config = spawnedAgentConfigs.get(handle);
+          if (config?.type === 'engineer' && agentResult.stopReason !== undefined) {
+            lastEngineerStopReason = agentResult.stopReason;
+          }
+          spawnedAgentConfigs.delete(handle);
+          return agentResult;
         },
         async cancel(handle: AgentHandle): Promise<void> {
           return registry.get<IAgentSpawner>('agent-spawner')!.cancel(handle);
@@ -577,7 +594,7 @@ const wrfcAdapter = {
                 'in_progress',
                 announceMeta,
               );
-            }).catch(() => {});
+            }).catch((err) => { console.error('[goodvibes-acp] WRFC emitToolCallUpdate(in_progress) failed:', String(err)); });
           },
           onWorkComplete: () => {
             const id = ids['goodvibes_work'];
@@ -588,7 +605,7 @@ const wrfcAdapter = {
               id,
               'completed',
               { '_goodvibes/attempt': attempt, '_goodvibes/phase': 'work' },
-            ).catch(() => {});
+            ).catch((err) => { console.error('[goodvibes-acp] WRFC emitToolCallUpdate(work/completed) failed:', String(err)); });
           },
           onReviewComplete: (result) => {
             const id = ids['goodvibes_review'];
@@ -608,7 +625,7 @@ const wrfcAdapter = {
               id,
               'completed',
               reviewMeta,
-            ).catch(() => {});
+            ).catch((err) => { console.error('[goodvibes-acp] WRFC emitToolCallUpdate(review/completed) failed:', String(err)); });
           },
           onFixComplete: () => {
             const id = ids['goodvibes_fix'];
@@ -619,7 +636,7 @@ const wrfcAdapter = {
               id,
               'completed',
               { '_goodvibes/attempt': attempt, '_goodvibes/phase': 'fix' },
-            ).catch(() => {});
+            ).catch((err) => { console.error('[goodvibes-acp] WRFC emitToolCallUpdate(fix/completed) failed:', String(err)); });
           },
         };
         return cb;
@@ -627,7 +644,16 @@ const wrfcAdapter = {
     };
 
     const result = await wrfcOrchestrator.run(runParams);
-    return { state: result.state, lastScore: result.lastScore };
+    return {
+      state: result.state,
+      lastScore: result.lastScore,
+      // Propagate the last engineer agent stop reason for ACP stop reason mapping.
+      // Only propagate 'max_tokens' and 'max_turn_requests' — 'end_turn' is the
+      // default and doesn't need special handling.
+      ...(lastEngineerStopReason === 'max_tokens' || lastEngineerStopReason === 'max_turn_requests'
+        ? { stopReason: lastEngineerStopReason as 'max_tokens' | 'max_turn_requests' }
+        : {}),
+    };
   },
 };
 
@@ -665,7 +691,7 @@ async function shutdown(signal: string): Promise<void> {
   await shutdownManager.shutdown();
   // Allow the event loop to drain pending I/O (e.g. finish event socket writes)
   // before forcing exit. The process exits naturally once all handles close.
-  const gracePeriod = config.get<number>('runtime.agentGracePeriodMs') ?? 2000;
+  const gracePeriod = config.get<number>('runtime.agentGracePeriodMs') ?? 10000;
   setTimeout(() => process.exit(0), gracePeriod).unref();
 }
 
@@ -731,6 +757,7 @@ if (mode === 'daemon') {
     host: daemonHost,
     healthPort: daemonHealthPort,
     pidFile: daemonPidFile,
+    healthCheck,
     onConnection: (socket: Socket) => {
       const remoteId = `${socket.remoteAddress}:${socket.remotePort}`;
       console.error(`[goodvibes-acp] Daemon: new TCP connection from ${remoteId}`);
@@ -746,7 +773,9 @@ if (mode === 'daemon') {
       // Log when this client disconnects
       conn.closed.then(() => {
         console.error(`[goodvibes-acp] Daemon: connection closed from ${remoteId}`);
-      }).catch(() => {});
+      }).catch(() => {
+        // Intentional: conn.closed should not reject in practice; guard against unexpected rejection
+      });
     },
   });
 

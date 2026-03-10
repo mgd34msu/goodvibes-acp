@@ -51,6 +51,13 @@ export interface AgentLoopConfig {
   onFileRead?: (path: string) => void;
   /** Maximum tokens for LLM responses */
   maxTokens?: number;
+  /**
+   * Whether to use streaming inference via provider.stream().
+   * When true (default), emits agent_message_chunk progress events for each
+   * text delta during LLM inference. Set to false to use non-streaming chat()
+   * (useful in tests or when the provider does not support streaming).
+   */
+  streaming?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -157,16 +164,12 @@ export class AgentLoop {
           signal: this.config.signal,
           maxTokens: this.config.maxTokens,
         };
-        // TODO ISS-060: This uses non-streaming chat(). Switch to provider.stream() to enable
-        // agent_message_chunk ACP updates during LLM inference (KB-04 lines 91-117).
-        // Steps:
-        //   1. Replace chat() with stream() returning AsyncIterable<ChatChunk>
-        //   2. Accumulate content blocks and emit onProgress({type:'agent_message_chunk', chunk})
-        //      for each text delta chunk via the onProgress callback
-        //   3. Handle tool_use blocks when the stream signals tool calls
-        //   4. Add AgentLoopConfig.streaming?: boolean (default true) for test compatibility
-        //   5. Wire onProgress to the ACP session update emitter so chunks reach the client
-        response = await this.config.provider.chat(params);
+        const useStreaming = this.config.streaming !== false && typeof this.config.provider.stream === 'function';
+        if (useStreaming) {
+          response = await this._runStreaming(params);
+        } else {
+          response = await this.config.provider.chat(params);
+        }
       } catch (err) {
         if (this.config.signal?.aborted) {
           return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'cancelled', filesModified: Array.from(this._filesModified) };
@@ -233,6 +236,82 @@ export class AgentLoop {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
+
+  /**
+   * Run a single LLM turn via provider.stream(), accumulating chunks into a
+   * ChatResponse-equivalent. Emits agent_message_chunk progress events for
+   * each text_delta chunk so ACP clients receive streaming text deltas.
+   */
+  private async _runStreaming(params: ChatParams): Promise<import('../../types/llm.js').ChatResponse> {
+    const content: ContentBlock[] = [];
+    let stopReason: import('../../types/llm.js').StopReason = 'end_turn';
+    let usage = { inputTokens: 0, outputTokens: 0 };
+
+    // State for assembling tool_use blocks from streaming chunks
+    let currentToolUse: { id: string; name: string; inputParts: string[] } | null = null;
+
+    // Accumulate text for the current text block
+    let currentText = '';
+
+    for await (const chunk of this.config.provider.stream!(params)) {
+      if (chunk.type === 'text_delta') {
+        currentText += chunk.text;
+        // Emit streaming progress event for ACP clients
+        this.config.onProgress?.({ type: 'agent_message_chunk', chunk: { type: 'text', text: chunk.text } });
+      } else if (chunk.type === 'thinking_delta') {
+        // Emit agent_thought_chunk progress event for ACP clients (prompt-turn spec)
+        this.config.onProgress?.({ type: 'agent_thought_chunk', chunk: { type: 'text', text: chunk.thinking } });
+      } else if (chunk.type === 'tool_use_start') {
+        // Flush any accumulated text block before starting a tool_use block
+        if (currentText) {
+          content.push({ type: 'text', text: currentText });
+          currentText = '';
+        }
+        // Flush any previous pending tool_use block (shouldn't happen, but safe)
+        if (currentToolUse) {
+          content.push({
+            type: 'tool_use',
+            id: currentToolUse.id,
+            name: currentToolUse.name,
+            input: this._parseToolInput(currentToolUse.inputParts.join('')),
+          });
+        }
+        currentToolUse = { id: chunk.id, name: chunk.name, inputParts: [] };
+      } else if (chunk.type === 'tool_use_delta') {
+        if (currentToolUse) {
+          currentToolUse.inputParts.push(chunk.input_json);
+        }
+      } else if (chunk.type === 'stop') {
+        stopReason = chunk.stopReason;
+        usage = chunk.usage;
+      }
+    }
+
+    // Flush any remaining accumulated content
+    if (currentText) {
+      content.push({ type: 'text', text: currentText });
+    }
+    if (currentToolUse) {
+      content.push({
+        type: 'tool_use',
+        id: currentToolUse.id,
+        name: currentToolUse.name,
+        input: this._parseToolInput(currentToolUse.inputParts.join('')),
+      });
+    }
+
+    return { content, stopReason, usage };
+  }
+
+  /** Safely parse accumulated input JSON from tool_use_delta chunks. */
+  private _parseToolInput(json: string): unknown {
+    if (!json) return {};
+    try {
+      return JSON.parse(json);
+    } catch {
+      return {};
+    }
+  }
 
   /** Collect tool definitions from all providers, namespaced as providerName__toolName */
   private _collectToolDefinitions(): LLMToolDefinition[] {

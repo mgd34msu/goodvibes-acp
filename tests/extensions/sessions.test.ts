@@ -119,6 +119,63 @@ describe('SessionManager', () => {
       expect(history).toHaveLength(1);
       expect(history[0].content).toBe('hello');
     });
+
+    // ISS-019: load() with cwd/mcpServers params updates stored context
+    it('updates stored cwd when params.cwd is provided', async () => {
+      await manager.create({ sessionId: 'load-cwd-1', cwd: '/original' });
+      const { context } = await manager.load('load-cwd-1', { cwd: '/updated' });
+
+      expect(context.config.cwd).toBe('/updated');
+
+      // Verify the update was persisted
+      const persisted = await manager.get('load-cwd-1');
+      expect(persisted!.config.cwd).toBe('/updated');
+    });
+
+    it('updates stored mcpServers when params.mcpServers is provided', async () => {
+      const original = [{ name: 'old-server', transport: 'stdio' as const, command: 'old', args: [] }];
+      await manager.create({ sessionId: 'load-mcp-1', cwd: '/tmp', mcpServers: original });
+
+      const updated = [
+        { name: 'new-server-a', transport: 'stdio' as const, command: 'new-a', args: [] },
+        { name: 'new-server-b', transport: 'stdio' as const, command: 'new-b', args: [] },
+      ];
+      const { context } = await manager.load('load-mcp-1', { mcpServers: updated });
+
+      expect(context.config.mcpServers).toEqual(updated);
+      expect(context.config.mcpServers).toHaveLength(2);
+
+      // Verify persisted
+      const persisted = await manager.get('load-mcp-1');
+      expect(persisted!.config.mcpServers).toEqual(updated);
+    });
+
+    it('updates both cwd and mcpServers when both params are provided', async () => {
+      await manager.create({ sessionId: 'load-both-1', cwd: '/original' });
+      const newServers = [{ name: 'srv', transport: 'stdio' as const, command: 'srv', args: [] }];
+
+      const { context } = await manager.load('load-both-1', { cwd: '/new-cwd', mcpServers: newServers });
+
+      expect(context.config.cwd).toBe('/new-cwd');
+      expect(context.config.mcpServers).toEqual(newServers);
+    });
+
+    it('leaves stored values intact when no params are provided', async () => {
+      const servers = [{ name: 'srv', transport: 'stdio' as const, command: 'srv', args: [] }];
+      await manager.create({ sessionId: 'load-noop-1', cwd: '/original', mcpServers: servers });
+
+      const { context } = await manager.load('load-noop-1');
+
+      expect(context.config.cwd).toBe('/original');
+      expect(context.config.mcpServers).toEqual(servers);
+    });
+
+    it('leaves stored values intact when params object is empty', async () => {
+      await manager.create({ sessionId: 'load-noop-2', cwd: '/original' });
+      const { context } = await manager.load('load-noop-2', {});
+
+      expect(context.config.cwd).toBe('/original');
+    });
   });
 
   // ---------------------------------------------------------------------------

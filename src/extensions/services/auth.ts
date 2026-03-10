@@ -194,3 +194,6 @@ export class ServiceAuthOrchestrator {
     return { success: false, error, timestamp: new Date().toISOString() };
   }
 }
+
+/** Alias for backwards compatibility */
+export { ServiceAuthOrchestrator as AuthOrchestrator };

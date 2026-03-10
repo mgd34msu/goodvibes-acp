@@ -447,13 +447,14 @@ describe('GoodVibesExtensions', () => {
   // ---------------------------------------------------------------------------
 
   describe("handle('_goodvibes/analytics')", () => {
-    test('returns totalTokensUsed, activeBudgets, topTools, _meta', async () => {
+    test('returns KB-08 compliant shape: tokenUsage, turnCount, agentCount, duration_ms, _meta', async () => {
       const ext = makeExtensions();
       const result = await ext.handle('_goodvibes/analytics') as Record<string, unknown>;
 
-      expect(result).toHaveProperty('totalTokensUsed');
-      expect(result).toHaveProperty('activeBudgets');
-      expect(result).toHaveProperty('topTools');
+      expect(result).toHaveProperty('tokenUsage');
+      expect(result).toHaveProperty('turnCount');
+      expect(result).toHaveProperty('agentCount');
+      expect(result).toHaveProperty('duration_ms');
       expect(result).toHaveProperty('_meta');
     });
 
@@ -461,63 +462,56 @@ describe('GoodVibesExtensions', () => {
       const ext = makeExtensions();
       const result = await ext.handle('_goodvibes/analytics') as Record<string, unknown>;
 
-      expect(result.totalTokensUsed).toBe(0);
-      expect(result.activeBudgets).toEqual([]);
-      expect(result.topTools).toEqual([]);
+      const tokenUsage = result.tokenUsage as Record<string, number>;
+      expect(tokenUsage.input).toBe(0);
+      expect(tokenUsage.output).toBe(0);
+      expect(tokenUsage.total).toBe(0);
+      expect(result.turnCount).toBe(0);
+      expect(result.agentCount).toBe(0);
+      expect(result.duration_ms).toBe(0);
     });
 
     test('returns analytics data from registered analytics engine', async () => {
       const registry = new Registry();
-      const mockDashboard = {
-        totalTokensUsed: 5000,
-        budgetUtilization: {},
-        topTools: [
-          { toolName: 'precision_read', calls: 10, tokens: 1000 },
-          { toolName: 'precision_write', calls: 5, tokens: 500 },
-        ],
-      };
-      const mockBudgets = new Map([
-        ['budget-1', { sessionId: 'sess-1', used: 200, remaining: 800 }],
-      ]);
       const mockEngine = {
-        getDashboard: () => mockDashboard,
-        _store: { budgets: mockBudgets },
+        getAnalyticsResponse: (req?: { sessionId?: string }) => ({
+          tokenUsage: { input: 2000, output: 3000, total: 5000 },
+          turnCount: 12,
+          agentCount: 3,
+          duration_ms: 45000,
+        }),
       };
       registry.register('analytics-engine', mockEngine);
 
       const ext = makeExtensions({ registry });
       const result = await ext.handle('_goodvibes/analytics') as Record<string, unknown>;
 
-      expect(result.totalTokensUsed).toBe(5000);
-
-      const topTools = result.topTools as Array<{ name: string; calls: number; tokens: number }>;
-      expect(topTools).toHaveLength(2);
-      expect(topTools[0].name).toBe('precision_read');
-      expect(topTools[0].calls).toBe(10);
-      expect(topTools[0].tokens).toBe(1000);
-
-      const activeBudgets = result.activeBudgets as Array<{ sessionId: string; used: number; remaining: number }>;
-      expect(activeBudgets).toHaveLength(1);
-      expect(activeBudgets[0].sessionId).toBe('sess-1');
-      expect(activeBudgets[0].used).toBe(200);
-      expect(activeBudgets[0].remaining).toBe(800);
+      const tokenUsage = result.tokenUsage as Record<string, number>;
+      expect(tokenUsage.input).toBe(2000);
+      expect(tokenUsage.output).toBe(3000);
+      expect(tokenUsage.total).toBe(5000);
+      expect(result.turnCount).toBe(12);
+      expect(result.agentCount).toBe(3);
+      expect(result.duration_ms).toBe(45000);
     });
 
-    test('handles analytics engine without budgets map gracefully', async () => {
+    test('handles analytics engine with minimal response gracefully', async () => {
       const registry = new Registry();
       const mockEngine = {
-        getDashboard: () => ({
-          totalTokensUsed: 100,
-          budgetUtilization: {},
-          topTools: [],
+        getAnalyticsResponse: () => ({
+          tokenUsage: { input: 50, output: 50, total: 100 },
+          turnCount: 1,
+          agentCount: 0,
+          duration_ms: 1000,
         }),
-        _store: {}, // no budgets Map
       };
       registry.register('analytics-engine', mockEngine);
 
       const ext = makeExtensions({ registry });
       const result = await ext.handle('_goodvibes/analytics') as Record<string, unknown>;
-      expect(result.activeBudgets).toEqual([]);
+      const tokenUsage = result.tokenUsage as Record<string, number>;
+      expect(tokenUsage.total).toBe(100);
+      expect(result.agentCount).toBe(0);
     });
 
     test('_meta includes version field', async () => {

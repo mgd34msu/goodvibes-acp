@@ -35,6 +35,11 @@ export type TriggerDefinition = {
   sessionId?: string;
   /** Additional metadata passed to the handler */
   metadata?: Record<string, unknown>;
+  /**
+   * Timeout in milliseconds for handler execution.
+   * Defaults to DEFAULT_TRIGGER_TIMEOUT_MS (30000ms) if not set.
+   */
+  timeout?: number;
 };
 
 // ---------------------------------------------------------------------------

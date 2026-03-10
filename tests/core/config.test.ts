@@ -285,37 +285,40 @@ describe('Config', () => {
   // --- Environment variable overrides ---
 
   describe('environment variable overrides', () => {
-    it('GOODVIBES_RUNTIME_PORT overrides runtime.port', () => {
+    it('GOODVIBES_RUNTIME__PORT overrides runtime.port', () => {
       // Set env var before creating config
-      process.env['GOODVIBES_RUNTIME_PORT'] = '3333';
+      // Convention: double underscore __ = nesting separator, single _ = camelCase boundary
+      process.env['GOODVIBES_RUNTIME__PORT'] = '3333';
       const envConfig = new Config();
       expect(envConfig.get<number>('runtime.port')).toBe(3333);
       envConfig.destroy();
-      delete process.env['GOODVIBES_RUNTIME_PORT'];
+      delete process.env['GOODVIBES_RUNTIME__PORT'];
     });
 
-    it('GOODVIBES_LOGGING_LEVEL overrides logging.level', () => {
-      process.env['GOODVIBES_LOGGING_LEVEL'] = 'debug';
+    it('GOODVIBES_LOGGING__LEVEL overrides logging.level', () => {
+      process.env['GOODVIBES_LOGGING__LEVEL'] = 'debug';
       const envConfig = new Config();
       expect(envConfig.get<string>('logging.level')).toBe('debug');
       envConfig.destroy();
-      delete process.env['GOODVIBES_LOGGING_LEVEL'];
+      delete process.env['GOODVIBES_LOGGING__LEVEL'];
     });
 
     it('GOODVIBES_ vars with true/false coerce to boolean', () => {
-      process.env['GOODVIBES_WRFC_ENABLEQUALITYGATES'] = 'false';
+      // GOODVIBES_WRFC__ENABLE_QUALITY_GATES → wrfc.enableQualityGates
+      process.env['GOODVIBES_WRFC__ENABLE_QUALITY_GATES'] = 'false';
       const envConfig = new Config();
-      expect(envConfig.get<boolean>('wrfc.enablequalitygates')).toBe(false);
+      expect(envConfig.get<boolean>('wrfc.enableQualityGates')).toBe(false);
       envConfig.destroy();
-      delete process.env['GOODVIBES_WRFC_ENABLEQUALITYGATES'];
+      delete process.env['GOODVIBES_WRFC__ENABLE_QUALITY_GATES'];
     });
 
     it('GOODVIBES_ vars with numeric strings coerce to number', () => {
-      process.env['GOODVIBES_AGENTS_MAXPARALLEL'] = '10';
+      // GOODVIBES_AGENTS__MAX_PARALLEL → agents.maxParallel
+      process.env['GOODVIBES_AGENTS__MAX_PARALLEL'] = '10';
       const envConfig = new Config();
-      expect(envConfig.get<number>('agents.maxparallel')).toBe(10);
+      expect(envConfig.get<number>('agents.maxParallel')).toBe(10);
       envConfig.destroy();
-      delete process.env['GOODVIBES_AGENTS_MAXPARALLEL'];
+      delete process.env['GOODVIBES_AGENTS__MAX_PARALLEL'];
     });
 
     it('non-GOODVIBES_ env vars are ignored', () => {

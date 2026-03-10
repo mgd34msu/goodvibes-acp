@@ -117,7 +117,7 @@ export class WRFCEventBridge {
                 '_goodvibes/attempt': payload.attempt,
               },
             )
-            .catch(() => {});
+            .catch((err) => { console.error('[WRFCEventBridge] emitToolCall(work) failed:', String(err)); });
 
           // Immediately transition to in_progress
           this._emitter
@@ -125,7 +125,7 @@ export class WRFCEventBridge {
               '_goodvibes/phase': 'work',
               '_goodvibes/attempt': payload.attempt,
             })
-            .catch(() => {});
+            .catch((err) => { console.error('[WRFCEventBridge] emitToolCallUpdate(work/in_progress) failed:', String(err)); });
         } else if (payload.to === 'reviewing') {
           const toolCallId = this._toolCallId(payload.workId, 'review');
           this._emitter
@@ -140,14 +140,14 @@ export class WRFCEventBridge {
                 '_goodvibes/attempt': payload.attempt,
               },
             )
-            .catch(() => {});
+            .catch((err) => { console.error('[WRFCEventBridge] emitToolCall(review) failed:', String(err)); });
 
           this._emitter
             .emitToolCallUpdate(payload.sessionId, toolCallId, 'in_progress', {
               '_goodvibes/phase': 'review',
               '_goodvibes/attempt': payload.attempt,
             })
-            .catch(() => {});
+            .catch((err) => { console.error('[WRFCEventBridge] emitToolCallUpdate(review/in_progress) failed:', String(err)); });
         } else if (payload.to === 'fixing') {
           const toolCallId = this._toolCallId(payload.workId, 'fix');
           this._emitter
@@ -162,14 +162,14 @@ export class WRFCEventBridge {
                 '_goodvibes/attempt': payload.attempt,
               },
             )
-            .catch(() => {});
+            .catch((err) => { console.error('[WRFCEventBridge] emitToolCall(fix) failed:', String(err)); });
 
           this._emitter
             .emitToolCallUpdate(payload.sessionId, toolCallId, 'in_progress', {
               '_goodvibes/phase': 'fix',
               '_goodvibes/attempt': payload.attempt,
             })
-            .catch(() => {});
+            .catch((err) => { console.error('[WRFCEventBridge] emitToolCallUpdate(fix/in_progress) failed:', String(err)); });
         }
       }),
     );
@@ -187,7 +187,7 @@ export class WRFCEventBridge {
             '_goodvibes/phase': 'work',
             '_goodvibes/filesModified': p.filesModified.length,
           }, workContent)
-          .catch(() => {});
+          .catch((err) => { console.error('[WRFCEventBridge] emitToolCallUpdate(work/completed) failed:', String(err)); });
       }),
     );
 
@@ -206,7 +206,7 @@ export class WRFCEventBridge {
             '_goodvibes/score': p.score,
             '_goodvibes/passed': p.passed,
           }, reviewContent)
-          .catch(() => {});
+          .catch((err) => { console.error('[WRFCEventBridge] emitToolCallUpdate(review/completed) failed:', String(err)); });
       }),
     );
 
@@ -223,7 +223,7 @@ export class WRFCEventBridge {
             '_goodvibes/phase': 'fix',
             '_goodvibes/resolvedIssues': p.resolvedIssues.length,
           }, fixContent)
-          .catch(() => {});
+          .catch((err) => { console.error('[WRFCEventBridge] emitToolCallUpdate(fix/completed) failed:', String(err)); });
       }),
     );
 

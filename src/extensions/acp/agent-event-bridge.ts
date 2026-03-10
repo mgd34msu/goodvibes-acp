@@ -65,7 +65,7 @@ export class AgentEventBridge {
               '_goodvibes/agentType': metadata.type,
             },
           )
-          .catch(() => {});
+          .catch((err) => { console.error('[AgentEventBridge] emitToolCall(agent:registered) failed:', String(err)); });
       }),
     );
 
@@ -95,7 +95,7 @@ export class AgentEventBridge {
 
         this._emitter
           .emitToolCallUpdate(sessionId, toolCallId, status)
-          .catch(() => {});
+          .catch((err) => { console.error('[AgentEventBridge] emitToolCallUpdate(agent:status-changed) failed:', String(err)); });
       }),
     );
   }

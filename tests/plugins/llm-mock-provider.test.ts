@@ -129,7 +129,7 @@ describe('MockProvider — stream', () => {
     });
   });
 
-  it('yields only stop chunk when content has no text blocks (tool_use only)', async () => {
+  it('yields tool_use_start, tool_use_delta, then stop chunk for tool_use only response', async () => {
     const response: ChatResponse = {
       content: [
         { type: 'tool_use', id: 'tool-1', name: 'read_file', input: { path: '/tmp/foo' } },
@@ -144,8 +144,11 @@ describe('MockProvider — stream', () => {
       chunks.push(chunk);
     }
 
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0]).toEqual({
+    // tool_use blocks emit tool_use_start + tool_use_delta + stop
+    expect(chunks).toHaveLength(3);
+    expect(chunks[0]).toEqual({ type: 'tool_use_start', id: 'tool-1', name: 'read_file' });
+    expect(chunks[1]).toEqual({ type: 'tool_use_delta', input_json: JSON.stringify({ path: '/tmp/foo' }) });
+    expect(chunks[2]).toEqual({
       type: 'stop',
       stopReason: 'tool_use',
       usage: { inputTokens: 15, outputTokens: 8 },
@@ -161,7 +164,7 @@ describe('MockProvider — stream', () => {
     expect(mock.calls[0].model).toBe('streaming-model');
   });
 
-  it('yields multiple text_delta chunks for multiple text blocks', async () => {
+  it('yields text_delta, tool_use_start/delta, text_delta, and stop for mixed response', async () => {
     const response: ChatResponse = {
       content: [
         { type: 'text', text: 'part one' },
@@ -178,10 +181,12 @@ describe('MockProvider — stream', () => {
       chunks.push(chunk);
     }
 
-    // 2 text blocks emit deltas, tool_use is skipped, then stop
-    expect(chunks).toHaveLength(3);
+    // text blocks emit text_delta, tool_use emits tool_use_start + tool_use_delta, then stop
+    expect(chunks).toHaveLength(5);
     expect(chunks[0]).toEqual({ type: 'text_delta', text: 'part one' });
-    expect(chunks[1]).toEqual({ type: 'text_delta', text: 'part two' });
-    expect(chunks[2].type).toBe('stop');
+    expect(chunks[1]).toEqual({ type: 'tool_use_start', id: 'tool-1', name: 'exec' });
+    expect(chunks[2]).toEqual({ type: 'tool_use_delta', input_json: '{}' });
+    expect(chunks[3]).toEqual({ type: 'text_delta', text: 'part two' });
+    expect(chunks[4].type).toBe('stop');
   });
 });

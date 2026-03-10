@@ -123,10 +123,16 @@ describe('createTransport({ type: \'tcp\' })', () => {
 });
 
 describe('createTransport({ type: \'websocket\' })', () => {
-  test('throws with message about WebSocket not being implemented', () => {
+  test('throws with message directing to createWebSocketTransport', () => {
     expect(() =>
       createTransport({ type: 'websocket', port: 9999 }),
-    ).toThrow('WebSocket transport is not yet implemented');
+    ).toThrow('createWebSocketTransport');
+  });
+
+  test('throws with message directing to createWebSocketServerStream', () => {
+    expect(() =>
+      createTransport({ type: 'websocket', port: 9999 }),
+    ).toThrow('createWebSocketServerStream');
   });
 });
 

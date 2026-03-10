@@ -176,6 +176,14 @@ export class DatabaseTools {
 
   /**
    * Generate a basic SQL template for a table operation.
+   *
+   * @throws {Error} if `table` or any column name contains characters outside
+   *   `[a-zA-Z0-9_]`, or if `where` contains characters that indicate raw SQL
+   *   injection patterns (semicolons, comments, quotes).
+   *
+   * The `where` parameter is intended for safe, parameterized placeholder text
+   * only (e.g. `"id = :id"`). Freeform SQL expressions with literal values
+   * are explicitly not supported — use parameterized queries at the call site.
    */
   generateQuery(
     table: string,
@@ -183,12 +191,18 @@ export class DatabaseTools {
     columns: string[] = ['*'],
     where?: string,
   ): string {
-    const quotedTable = `"${table}"`;
+    validateIdentifier(table, 'table');
+    for (const col of columns) {
+      if (col !== '*') validateIdentifier(col, 'column');
+    }
+    if (where !== undefined) validateWhereClause(where);
+
+    const quotedTable = `"${escapeIdentifier(table)}"`;
     const whereClause = where ? `\nWHERE ${where}` : '';
 
     switch (operation) {
       case 'select': {
-        const cols = columns.includes('*') ? '*' : columns.map((c) => `"${c}"`).join(', ');
+        const cols = columns.includes('*') ? '*' : columns.map((c) => `"${escapeIdentifier(c)}"`).join(', ');
         return `SELECT ${cols}\nFROM ${quotedTable}${whereClause};`;
       }
 
@@ -197,7 +211,7 @@ export class DatabaseTools {
         if (cols.length === 0) {
           return `INSERT INTO ${quotedTable} DEFAULT VALUES;`;
         }
-        const colList = cols.map((c) => `"${c}"`).join(', ');
+        const colList = cols.map((c) => `"${escapeIdentifier(c)}"`).join(', ');
         const valList = cols.map((c) => `:${c}`).join(', ');
         return `INSERT INTO ${quotedTable} (${colList})\nVALUES (${valList});`;
       }
@@ -207,7 +221,7 @@ export class DatabaseTools {
         if (cols.length === 0) {
           return `UPDATE ${quotedTable}\nSET <column> = <value>${whereClause};`;
         }
-        const setList = cols.map((c) => `"${c}" = :${c}`).join(',\n  ');
+        const setList = cols.map((c) => `"${escapeIdentifier(c)}" = :${c}`).join(',\n  ');
         return `UPDATE ${quotedTable}\nSET ${setList}${whereClause};`;
       }
 
@@ -297,4 +311,66 @@ const PRISMA_SCALARS = new Set([
 
 function isPrismaScalar(typeName: string): boolean {
   return PRISMA_SCALARS.has(typeName);
+}
+
+// ---------------------------------------------------------------------------
+// SQL identifier validation & escaping
+// ---------------------------------------------------------------------------
+
+/**
+ * Pattern for safe SQL identifiers.
+ * Allows only alphanumeric characters and underscores.
+ */
+const SAFE_IDENTIFIER_RE = /^[a-zA-Z0-9_]+$/;
+
+/**
+ * Validate that `name` is a safe SQL identifier.
+ * Throws if it contains characters outside `[a-zA-Z0-9_]` or is empty.
+ *
+ * @param name  - The identifier to validate.
+ * @param label - Human-readable label used in the error message (e.g. "table").
+ */
+function validateIdentifier(name: string, label: string): void {
+  if (!name || !SAFE_IDENTIFIER_RE.test(name)) {
+    throw new Error(
+      `Invalid SQL identifier for ${label}: "${name}". ` +
+      `Only [a-zA-Z0-9_] characters are allowed.`,
+    );
+  }
+}
+
+/**
+ * Escape embedded double-quotes inside an identifier by doubling them.
+ * e.g. `user"table` → `user""table` (safe inside double-quoted identifiers).
+ *
+ * This is a defence-in-depth measure — validateIdentifier already rejects any
+ * name containing a double-quote. escapeIdentifier is called after validation
+ * so in practice the substitution is a no-op for valid inputs.
+ */
+function escapeIdentifier(name: string): string {
+  return name.replace(/"/g, '""');
+}
+
+/**
+ * Validate that a WHERE clause string does not contain raw SQL injection
+ * patterns. Rejects strings containing:
+ *   - Single quotes (string literals)
+ *   - Semicolons (statement terminators)
+ *   - Line comments (`--`)
+ *   - Block comments (`/*` or `*\/`)
+ *
+ * Only parameterized placeholder expressions (e.g. `"id = :id"`) are
+ * safe to pass as `where`.
+ *
+ * @throws {Error} if the string contains a forbidden pattern.
+ */
+function validateWhereClause(where: string): void {
+  // Forbidden patterns: string literals, statement terminators, SQL comments
+  if (/[';]/.test(where) || /--/.test(where) || /\/\*/.test(where) || /\*\//.test(where)) {
+    throw new Error(
+      `Unsafe WHERE clause: "${where}". ` +
+      `Only parameterized placeholder expressions (e.g. "id = :id") are allowed. ` +
+      `String literals, semicolons, and SQL comments are forbidden.`,
+    );
+  }
 }

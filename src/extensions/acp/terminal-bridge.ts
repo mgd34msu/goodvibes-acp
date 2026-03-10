@@ -11,6 +11,21 @@ import type { TerminalHandle as AcpTerminalHandle } from '@agentclientprotocol/s
 import type * as schema from '@agentclientprotocol/sdk';
 import type { ITerminal, TerminalHandle, TerminalCreateOptions, ExitResult } from '../../types/registry.js';
 import { spawn, type ChildProcess } from 'node:child_process';
+import type { EventBus } from '../../core/event-bus.js';
+
+// ---------------------------------------------------------------------------
+// RequestTracker
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimal interface for tracking in-flight JSON-RPC request IDs sent to the client.
+ * Used by bridge classes to register/unregister pending requests so GoodVibesAgent
+ * can send `$/cancel_request` notifications during cascading cancellation.
+ */
+export interface RequestTracker {
+  add(requestId: string): void;
+  remove(requestId: string): void;
+}
 
 // ---------------------------------------------------------------------------
 // Internal handle union
@@ -55,6 +70,8 @@ export class AcpTerminal implements ITerminal {
     private readonly sessionId: string,
     private readonly clientCapabilities: schema.ClientCapabilities,
     private readonly cwd: string,
+    private readonly _tracker?: RequestTracker,
+    private readonly _eventBus?: EventBus,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -69,7 +86,7 @@ export class AcpTerminal implements ITerminal {
    */
   async create(opts: TerminalCreateOptions): Promise<TerminalHandle> {
     const id = `term-${this._nextId++}`;
-    const { command = '', args, env, cwd } = opts;
+    const { command = '', args, env, cwd, outputByteLimit } = opts;
     const handle: TerminalHandle = {
       id,
       command,
@@ -81,14 +98,25 @@ export class AcpTerminal implements ITerminal {
       ? Object.entries(env).map(([name, value]) => ({ name, value }))
       : undefined;
 
-    if (this.clientCapabilities.terminal) {
-      // ACP-backed terminal
-      const acpHandle = await this.conn.createTerminal({
-        command,
-        sessionId: this.sessionId,
-        cwd: cwd ?? this.cwd,
-        ...(envVars ? { env: envVars } : {}),
-      });
+        if (this.clientCapabilities.terminal) {
+      // ACP-backed terminal — track request for cascading cancellation
+      const _reqId = crypto.randomUUID();
+      this._tracker?.add(_reqId);
+      this._eventBus?.emit('acp:client-request:start', { sessionId: this.sessionId, requestId: _reqId });
+      let acpHandle: AcpTerminalHandle;
+      try {
+        acpHandle = await this.conn.createTerminal({
+          command,
+          sessionId: this.sessionId,
+          cwd: cwd ?? this.cwd,
+          ...(args !== undefined ? { args } : {}),
+          ...(envVars ? { env: envVars } : {}),
+          ...(outputByteLimit !== undefined ? { outputByteLimit } : {}),
+        });
+      } finally {
+        this._tracker?.remove(_reqId);
+        this._eventBus?.emit('acp:client-request:end', { sessionId: this.sessionId, requestId: _reqId });
+      }
 
       this._handles.set(id, { kind: 'acp', handle, acpHandle });
     } else {

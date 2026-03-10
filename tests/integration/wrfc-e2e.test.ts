@@ -268,8 +268,8 @@ describe('WRFC e2e: cancellation via AbortSignal', () => {
       signal: controller.signal,
     });
 
-    // Orchestrator drives to escalated on abort (as documented in orchestrator.ts)
-    expect(ctx.state).toBe('escalated');
+    // Orchestrator drives to cancelled on abort (pre-abort signal before any work starts)
+    expect(ctx.state).toBe('cancelled');
     expect(ctx.finishedAt).toBeDefined();
   });
 });

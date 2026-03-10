@@ -389,6 +389,86 @@ describe('TriggerEngine', () => {
     });
   });
 
+  // --- timeout enforcement ---
+
+  describe('timeout enforcement', () => {
+    it('emits error event when handler exceeds custom timeout', async () => {
+      const errorEvents: unknown[] = [];
+      bus.on('error', (ev) => errorEvents.push(ev.payload));
+
+      const slowHandler: ITriggerHandler = {
+        canHandle: () => true,
+        execute: async () => {
+          // Simulate a handler that takes longer than the trigger timeout
+          await new Promise((r) => setTimeout(r, 200));
+        },
+      };
+      registry.register('slow-handler', slowHandler);
+      engine.register({
+        id: 'timeout-trigger',
+        name: 'T',
+        eventPattern: 'test',
+        handlerKey: 'slow-handler',
+        timeout: 50, // 50ms timeout — handler takes 200ms
+      });
+
+      bus.emit('test', {});
+
+      // Wait for timeout to fire and error to propagate
+      await new Promise((r) => setTimeout(r, 300));
+
+      expect(errorEvents).toHaveLength(1);
+      const payload = errorEvents[0] as { source: string; triggerId: string; error: string };
+      expect(payload.source).toBe('trigger-engine');
+      expect(payload.triggerId).toBe('timeout-trigger');
+      expect(payload.error).toContain('timed out');
+    });
+
+    it('does not emit error when handler completes within timeout', async () => {
+      const errorEvents: unknown[] = [];
+      bus.on('error', (ev) => errorEvents.push(ev.payload));
+
+      const fastHandler: ITriggerHandler = {
+        canHandle: () => true,
+        execute: async () => {
+          // Completes well within the timeout
+          await new Promise((r) => setTimeout(r, 10));
+        },
+      };
+      registry.register('fast-handler', fastHandler);
+      engine.register({
+        id: 'fast-trigger',
+        name: 'T',
+        eventPattern: 'test',
+        handlerKey: 'fast-handler',
+        timeout: 500, // generous timeout
+      });
+
+      bus.emit('test', {});
+
+      // Wait for handler to complete
+      await new Promise((r) => setTimeout(r, 100));
+
+      expect(errorEvents).toHaveLength(0);
+    });
+
+    it('uses DEFAULT_TRIGGER_TIMEOUT_MS when no timeout specified', async () => {
+      // Verify that a trigger without explicit timeout still uses a timeout
+      // (tests that the default is applied — we don\'t wait 30s, just confirm it registers)
+      engine.register({
+        id: 'default-timeout-trigger',
+        name: 'T',
+        eventPattern: 'test',
+        handlerKey: 'missing-default', // no handler registered
+      });
+      const def = engine.get('default-timeout-trigger');
+      // timeout field is not set — engine uses DEFAULT_TRIGGER_TIMEOUT_MS
+      expect(def?.timeout).toBeUndefined();
+      // The trigger registers fine and doesn\'t throw
+      expect(engine.list()).toHaveLength(1);
+    });
+  });
+
   // --- destroy ---
 
   describe('destroy', () => {

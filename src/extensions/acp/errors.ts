@@ -35,6 +35,8 @@ export const ACP_ERROR_CODES = {
   PERMISSION_DENIED: -32003,
   /** Agent spawn failed — failed to spawn a sub-agent */
   AGENT_SPAWN_FAILED: -32004,
+  /** Request cancelled — the request was cancelled before completion */
+  REQUEST_CANCELLED: -32800,
 } as const;
 
 export type AcpErrorCode = (typeof ACP_ERROR_CODES)[keyof typeof ACP_ERROR_CODES];
@@ -77,6 +79,9 @@ export function toAcpError(err: unknown): AcpErrorShape {
     }
     if (msg.startsWith('Agent spawn failed')) {
       return { code: ACP_ERROR_CODES.AGENT_SPAWN_FAILED, message: msg };
+    }
+    if (msg.startsWith('Request cancelled') || msg.startsWith('Cancelled')) {
+      return { code: ACP_ERROR_CODES.REQUEST_CANCELLED, message: msg };
     }
 
     return {

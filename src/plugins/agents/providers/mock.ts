@@ -69,7 +69,7 @@ export class MockProvider implements ILLMProvider {
         yield { type: 'tool_use_start', id: block.id, name: block.name };
         yield { type: 'tool_use_delta', input_json: JSON.stringify(block.input) };
       }
-      // tool_result blocks are user-turn content and are not streamed
+      // tool_result blocks are skipped (user-turn content, not assistant output)
     }
     yield { type: 'stop', stopReason: response.stopReason, usage: response.usage };
   }

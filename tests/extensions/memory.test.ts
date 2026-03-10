@@ -394,7 +394,8 @@ describe('MemoryManager', () => {
       // Read the written file to verify it's valid JSON
       const raw = await Bun.file(join(tmpDir, 'memory.json')).text();
       const parsed = JSON.parse(raw);
-      expect(parsed.decisions).toHaveLength(1);
+      // save() writes versioned format: { version, data: { decisions, ... } }
+      expect(parsed.data.decisions).toHaveLength(1);
     });
 
     it('load() restores data saved by save()', async () => {

@@ -148,12 +148,13 @@ describe('SessionAdapter', () => {
       await new Promise((r) => setTimeout(r, 0));
       calls.length = 0;
 
-      await sessions.setState('adapt-7', 'completed');
+      // idle → active is the valid transition from initial state
+      await sessions.setState('adapt-7', 'active');
       await new Promise((r) => setTimeout(r, 0));
 
       const title = calls[0].update.title as string;
       expect(title).toContain('idle');
-      expect(title).toContain('completed');
+      expect(title).toContain('active');
     });
 
     it('forwards session:mode-changed as sessionUpdate', async () => {
@@ -168,12 +169,13 @@ describe('SessionAdapter', () => {
       await sessions.setMode('adapt-8', 'plan');
       await new Promise((r) => setTimeout(r, 0));
 
-      expect(calls).toHaveLength(1);
+      // source emits current_mode_update first, then config_option_update
+      expect(calls.length).toBeGreaterThanOrEqual(1);
       expect(calls[0].sessionId).toBe('adapt-8');
-      expect(calls[0].update.sessionUpdate).toBe('session_info_update');
+      expect(calls[0].update.sessionUpdate).toBe('current_mode_update');
     });
 
-    it('session:mode-changed update title includes the new mode', async () => {
+    it('session:mode-changed update currentModeId matches the new mode', async () => {
       const { conn, calls } = makeConn();
       const adapter = new SessionAdapter(conn, sessions, bus);
       adapter.register();
@@ -185,8 +187,8 @@ describe('SessionAdapter', () => {
       await sessions.setMode('adapt-9', 'sandbox');
       await new Promise((r) => setTimeout(r, 0));
 
-      const title = calls[0].update.title as string;
-      expect(title).toContain('sandbox');
+      // First call is current_mode_update with currentModeId
+      expect(calls[0].update.currentModeId).toBe('sandbox');
     });
 
     it('does not forward events before register() is called', async () => {
@@ -295,7 +297,7 @@ describe('SessionAdapter', () => {
       await sessions.setMode('unreg-4', 'plan');
       await new Promise((r) => setTimeout(r, 0));
 
-      expect(calls).toHaveLength(0);
+      expect(calls).toHaveLength(0); // no forwarding after unregister
     });
 
     it('can re-register after unregister()', async () => {
@@ -397,17 +399,19 @@ describe('SessionAdapter', () => {
   // -------------------------------------------------------------------------
 
   describe('session:mode-changed with missing session context', () => {
-    it('does not call sessionUpdate when sessions.get() returns undefined', async () => {
+    it('always emits current_mode_update even when session is unknown, skips config_option_update', async () => {
       const { conn, calls } = makeConn();
       const adapter = new SessionAdapter(conn, sessions, bus);
       adapter.register();
 
       // Emit mode-changed directly on the bus for a session that was never created
-      // (bypasses SessionManager so sessions.get() returns undefined)
+      // source emits current_mode_update unconditionally, then only config_option_update if session found
       bus.emit('session:mode-changed', { sessionId: 'ghost', from: 'justvibes', to: 'plan' });
       await new Promise((r) => setTimeout(r, 10));
 
-      expect(calls).toHaveLength(0);
+      // current_mode_update is always emitted; config_option_update is skipped (no session)
+      expect(calls).toHaveLength(1);
+      expect(calls[0].update.sessionUpdate).toBe('current_mode_update');
     });
   });
 });

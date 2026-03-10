@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventBus } from '../../src/core/event-bus.js';
 import { DaemonManager } from '../../src/extensions/lifecycle/daemon.js';
+import { HealthCheck } from '../../src/extensions/lifecycle/health.js';
+import { ACP_PROTOCOL_VERSION } from '../../src/types/constants.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -262,6 +264,106 @@ describe('DaemonManager', () => {
       const payload = await payloadPromise;
       expect(typeof payload.remoteAddress).toBe('string');
       expect(typeof payload.remotePort).toBe('number');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // ISS-083: ACP_PROTOCOL_VERSION in health endpoint
+  // -------------------------------------------------------------------------
+
+  describe('health endpoint protocol version', () => {
+    it('GET /health includes ACP_PROTOCOL_VERSION (not hardcoded 1)', async () => {
+      await daemon.start({ port: tcpPort, healthPort, host: '127.0.0.1' });
+
+      const res = await fetch(`http://127.0.0.1:${healthPort}/health`);
+      const body = await res.json() as { agent: { protocolVersion: number } };
+      expect(body.agent.protocolVersion).toBe(ACP_PROTOCOL_VERSION);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // ISS-023: HealthCheck integration
+  // -------------------------------------------------------------------------
+
+  describe('HealthCheck integration', () => {
+    let health: HealthCheck;
+
+    beforeEach(async () => {
+      health = new HealthCheck(bus);
+    });
+
+    it('GET /health returns 200 with starting status when HealthCheck is starting', async () => {
+      await daemon.start({ port: tcpPort, healthPort, host: '127.0.0.1', healthCheck: health });
+
+      const res = await fetch(`http://127.0.0.1:${healthPort}/health`);
+      expect(res.status).toBe(200);
+      const body = await res.json() as { status: string };
+      expect(body.status).toBe('starting');
+    });
+
+    it('GET /health returns 200 with ready status after markReady()', async () => {
+      await daemon.start({ port: tcpPort, healthPort, host: '127.0.0.1', healthCheck: health });
+      health.markReady();
+
+      const res = await fetch(`http://127.0.0.1:${healthPort}/health`);
+      expect(res.status).toBe(200);
+      const body = await res.json() as { status: string };
+      expect(body.status).toBe('ready');
+    });
+
+    it('GET /health returns 503 when HealthCheck is degraded', async () => {
+      await daemon.start({ port: tcpPort, healthPort, host: '127.0.0.1', healthCheck: health });
+      health.markReady();
+      health.setCheck('db', false, 'DB is down');
+
+      const res = await fetch(`http://127.0.0.1:${healthPort}/health`);
+      expect(res.status).toBe(503);
+      const body = await res.json() as { status: string; checks: Record<string, unknown> };
+      expect(body.status).toBe('degraded');
+      expect(body.checks).toHaveProperty('db');
+    });
+
+    it('GET /health returns 503 when HealthCheck is shutting_down', async () => {
+      await daemon.start({ port: tcpPort, healthPort, host: '127.0.0.1', healthCheck: health });
+      health.markReady();
+      health.markShuttingDown();
+
+      const res = await fetch(`http://127.0.0.1:${healthPort}/health`);
+      expect(res.status).toBe(503);
+      const body = await res.json() as { status: string };
+      expect(body.status).toBe('shutting_down');
+    });
+
+    it('GET /health response includes uptime when HealthCheck provided', async () => {
+      await daemon.start({ port: tcpPort, healthPort, host: '127.0.0.1', healthCheck: health });
+
+      const res = await fetch(`http://127.0.0.1:${healthPort}/health`);
+      const body = await res.json() as { uptime: number };
+      expect(typeof body.uptime).toBe('number');
+      expect(body.uptime).toBeGreaterThanOrEqual(0);
+    });
+
+    it('GET /health recovers to 200 when failing check is fixed', async () => {
+      await daemon.start({ port: tcpPort, healthPort, host: '127.0.0.1', healthCheck: health });
+      health.markReady();
+      health.setCheck('cache', false, 'Redis down');
+
+      const degraded = await fetch(`http://127.0.0.1:${healthPort}/health`);
+      expect(degraded.status).toBe(503);
+
+      health.setCheck('cache', true);
+
+      const recovered = await fetch(`http://127.0.0.1:${healthPort}/health`);
+      expect(recovered.status).toBe(200);
+    });
+
+    it('GET /health without HealthCheck still returns 200 with status ok (backward compat)', async () => {
+      await daemon.start({ port: tcpPort, healthPort, host: '127.0.0.1' });
+
+      const res = await fetch(`http://127.0.0.1:${healthPort}/health`);
+      expect(res.status).toBe(200);
+      const body = await res.json() as { status: string };
+      expect(body.status).toBe('ok');
     });
   });
 });

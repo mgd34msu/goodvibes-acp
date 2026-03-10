@@ -67,7 +67,7 @@ const SECRET_PATTERNS: SecretPattern[] = [
   },
   {
     name: 'Stripe Secret Key',
-    pattern: /sk_live_[A-Za-z0-9]{24,}/,
+    pattern: /sk_live_[A-Za-z0-9_]{20,}/,
     severity: 'critical',
     fix: 'Revoke the Stripe secret key and generate a new one.',
   },

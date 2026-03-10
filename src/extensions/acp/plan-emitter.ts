@@ -16,7 +16,9 @@ interface InternalPlanEntry {
   /** Stable identifier used internally to look up and update entries */
   id: string;
   /** Human-readable description sent as the ACP PlanEntry.content */
-  content: string;
+  content?: string;
+  /** Alias for content — used when callers prefer a 'title' field name */
+  title?: string;
   status: acp.PlanEntryStatus;
   priority: acp.PlanEntryPriority;
 }
@@ -121,7 +123,7 @@ export class PlanEmitter {
   async emitPlan(sessionId: string): Promise<void> {
     const planEntries: acp.PlanEntry[] = Array.from(this.entries.values()).map(
       (e): acp.PlanEntry => ({
-        content: e.content,
+        content: e.content ?? e.title ?? '',
         priority: e.priority,
         status: e.status,
       }),
@@ -134,6 +136,6 @@ export class PlanEmitter {
         sessionId,
         update: { sessionUpdate: 'plan', ...plan } as acp.SessionUpdate,
       })
-      .catch(() => {});
+      .catch((err) => { console.error('[PlanEmitter] emitPlan sessionUpdate failed:', String(err)); });
   }
 }

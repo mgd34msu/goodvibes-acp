@@ -48,6 +48,10 @@ describe('ACP_ERROR_CODES', () => {
   test('AGENT_SPAWN_FAILED is -32004', () => {
     expect(ACP_ERROR_CODES.AGENT_SPAWN_FAILED).toBe(-32004);
   });
+
+  test('REQUEST_CANCELLED is -32800', () => {
+    expect(ACP_ERROR_CODES.REQUEST_CANCELLED).toBe(-32800);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -88,6 +92,20 @@ describe('toAcpError', () => {
     const result = toAcpError(err);
     expect(result.code).toBe(ACP_ERROR_CODES.AGENT_SPAWN_FAILED);
     expect(result.message).toBe('Agent spawn failed: quota exceeded');
+  });
+
+  test('maps Request cancelled prefix to REQUEST_CANCELLED', () => {
+    const err = new Error('Request cancelled: user initiated');
+    const result = toAcpError(err);
+    expect(result.code).toBe(ACP_ERROR_CODES.REQUEST_CANCELLED);
+    expect(result.message).toBe('Request cancelled: user initiated');
+  });
+
+  test('maps Cancelled prefix to REQUEST_CANCELLED', () => {
+    const err = new Error('Cancelled');
+    const result = toAcpError(err);
+    expect(result.code).toBe(ACP_ERROR_CODES.REQUEST_CANCELLED);
+    expect(result.message).toBe('Cancelled');
   });
 
   test('maps generic Error to INTERNAL_ERROR', () => {

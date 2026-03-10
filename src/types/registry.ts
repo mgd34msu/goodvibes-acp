@@ -249,6 +249,15 @@ export type TerminalCreateOptions = {
   env?: Record<string, string>;
   /** Working directory (absolute path) */
   cwd?: string;
+  /**
+   * Maximum number of output bytes to retain.
+   *
+   * When the limit is exceeded, the client truncates from the beginning of
+   * the output to stay within the limit. Forwarded to the ACP `terminal/create`
+   * request when the client advertises the `terminal` capability.
+   * Has no effect in the direct-spawn fallback path.
+   */
+  outputByteLimit?: number;
 };
 
 export interface ITerminal {

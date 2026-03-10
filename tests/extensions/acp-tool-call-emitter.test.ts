@@ -26,7 +26,7 @@ describe('ToolCallEmitter', () => {
       const { conn, calls } = makeConn();
       const emitter = new ToolCallEmitter(conn);
 
-      await emitter.emitToolCall('sess-1', 'tc-1', 'goodvibes_work', 'Work Phase', 'pending');
+      await emitter.emitToolCall('sess-1', 'tc-1', 'goodvibes_work', 'Work Phase');
 
       expect(calls).toHaveLength(1);
       const update = (calls[0] as { update: Record<string, unknown> }).update;
@@ -37,19 +37,19 @@ describe('ToolCallEmitter', () => {
       const { conn, calls } = makeConn();
       const emitter = new ToolCallEmitter(conn);
 
-      await emitter.emitToolCall('sess-1', 'tc-abc', 'goodvibes_review', 'Review Phase', 'in_progress');
+      await emitter.emitToolCall('sess-1', 'tc-abc', 'goodvibes_review', 'Review Phase');
 
       const update = (calls[0] as { update: Record<string, unknown> }).update;
       expect(update.toolCallId).toBe('tc-abc');
       expect(update.title).toBe('Review Phase');
-      expect(update.status).toBe('in_progress');
+      expect(update.status).toBe('pending');
     });
 
     it('threads the sessionId through to sessionUpdate params', async () => {
       const { conn, calls } = makeConn();
       const emitter = new ToolCallEmitter(conn);
 
-      await emitter.emitToolCall('my-session-id', 'tc-2', 'goodvibes_fix', 'Fix Phase', 'pending');
+      await emitter.emitToolCall('my-session-id', 'tc-2', 'goodvibes_fix', 'Fix Phase');
 
       expect((calls[0] as { sessionId: string }).sessionId).toBe('my-session-id');
     });
@@ -59,27 +59,28 @@ describe('ToolCallEmitter', () => {
       const emitter = new ToolCallEmitter(conn);
       const meta = { attempt: 2, score: 8.5 };
 
-      await emitter.emitToolCall('sess-1', 'tc-3', 'goodvibes_work', 'Work', 'in_progress', meta);
+      await emitter.emitToolCall('sess-1', 'tc-3', 'goodvibes_work', 'Work', 'other', meta);
 
       const update = (calls[0] as { update: Record<string, unknown> }).update;
-      expect(update._meta).toEqual(meta);
+      expect(update._meta).toEqual(expect.objectContaining(meta));
     });
 
-    it('omits _meta when not provided', async () => {
+    it('includes _goodvibes/tool_name in _meta even when no explicit meta is passed', async () => {
       const { conn, calls } = makeConn();
       const emitter = new ToolCallEmitter(conn);
 
-      await emitter.emitToolCall('sess-1', 'tc-4', 'goodvibes_work', 'Work', 'pending');
+      await emitter.emitToolCall('sess-1', 'tc-4', 'goodvibes_work', 'Work');
 
       const update = (calls[0] as { update: Record<string, unknown> }).update;
-      expect(update._meta).toBeUndefined();
+      const meta = update._meta as Record<string, unknown>;
+      expect(meta['_goodvibes/tool_name']).toBe('goodvibes_work');
     });
 
     it('passes pending status correctly', async () => {
       const { conn, calls } = makeConn();
       const emitter = new ToolCallEmitter(conn);
 
-      await emitter.emitToolCall('sess-1', 'tc-5', 'goodvibes_work', 'Work', 'pending');
+      await emitter.emitToolCall('sess-1', 'tc-5', 'goodvibes_work', 'Work');
 
       const update = (calls[0] as { update: Record<string, unknown> }).update;
       expect(update.status).toBe('pending');
@@ -89,10 +90,10 @@ describe('ToolCallEmitter', () => {
       const { conn, calls } = makeConn();
       const emitter = new ToolCallEmitter(conn);
 
-      await emitter.emitToolCall('sess-1', 'tc-6', 'goodvibes_work', 'Work', 'in_progress');
+      await emitter.emitToolCall('sess-1', 'tc-6', 'goodvibes_work', 'Work', 'other');
 
       const update = (calls[0] as { update: Record<string, unknown> }).update;
-      expect(update.status).toBe('in_progress');
+      expect(update.status).toBe('pending'); // status is always 'pending' on new tool_call
     });
   });
 
@@ -105,7 +106,7 @@ describe('ToolCallEmitter', () => {
       const { conn, calls } = makeConn();
       const emitter = new ToolCallEmitter(conn);
 
-      await emitter.emitToolCallUpdate('sess-1', 'tc-10', 'complete');
+      await emitter.emitToolCallUpdate('sess-1', 'tc-10', 'completed');
 
       expect(calls).toHaveLength(1);
       const update = (calls[0] as { update: Record<string, unknown> }).update;
@@ -116,18 +117,18 @@ describe('ToolCallEmitter', () => {
       const { conn, calls } = makeConn();
       const emitter = new ToolCallEmitter(conn);
 
-      await emitter.emitToolCallUpdate('sess-1', 'tc-xyz', 'complete');
+      await emitter.emitToolCallUpdate('sess-1', 'tc-xyz', 'completed');
 
       const update = (calls[0] as { update: Record<string, unknown> }).update;
       expect(update.toolCallId).toBe('tc-xyz');
-      expect(update.status).toBe('complete');
+      expect(update.status).toBe('completed');
     });
 
     it('threads the sessionId through to sessionUpdate params', async () => {
       const { conn, calls } = makeConn();
       const emitter = new ToolCallEmitter(conn);
 
-      await emitter.emitToolCallUpdate('target-session', 'tc-11', 'complete');
+      await emitter.emitToolCallUpdate('target-session', 'tc-11', 'completed');
 
       expect((calls[0] as { sessionId: string }).sessionId).toBe('target-session');
     });
@@ -137,7 +138,7 @@ describe('ToolCallEmitter', () => {
       const emitter = new ToolCallEmitter(conn);
       const meta = { score: 9.0, passed: true };
 
-      await emitter.emitToolCallUpdate('sess-1', 'tc-12', 'complete', meta);
+      await emitter.emitToolCallUpdate('sess-1', 'tc-12', 'completed', meta);
 
       const update = (calls[0] as { update: Record<string, unknown> }).update;
       expect(update._meta).toEqual(meta);

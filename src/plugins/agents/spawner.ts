@@ -64,6 +64,8 @@ type AgentState = {
   timer?: ReturnType<typeof setTimeout>;
   /** Timeout timer handle — cleared when agent reaches a terminal state */
   timeoutTimer?: ReturnType<typeof setTimeout>;
+  /** ACP stop reason from the underlying AgentLoop (populated on loop completion) */
+  loopStopReason?: string;
   /** Accumulated resolvers waiting on result() */
   resolvers: Array<(result: AgentResult) => void>;
   /** Accumulated rejecters waiting on result() */
@@ -367,8 +369,10 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
         message: loopResult.error ?? 'Unknown error',
       });
     } else {
-      // 'end_turn' or 'max_turn_requests'
+      // 'end_turn', 'max_tokens', or 'max_turn_requests' — all map to completed status
       state.status = 'completed';
+      // Preserve the ACP stop reason so callers can distinguish truncation
+      state.loopStopReason = loopResult.stopReason;
     }
 
     this._flushResolvers(state);
@@ -434,6 +438,7 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
       filesModified: state.filesModified ?? [],
       errors: state.errors,
       durationMs: finishedAt - spawnedAt,
+      ...(state.loopStopReason !== undefined ? { stopReason: state.loopStopReason } : {}),
     };
   }
 

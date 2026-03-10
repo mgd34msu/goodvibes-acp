@@ -15,6 +15,8 @@
 import { randomUUID } from 'crypto';
 import type * as acp from '@agentclientprotocol/sdk';
 import type { PermissionRequest, PermissionResult, PermissionPolicy, PermissionType } from '../../types/permissions.js';
+import type { RequestTracker } from './terminal-bridge.js';
+import type { EventBus } from '../../core/event-bus.js';
 
 // ---------------------------------------------------------------------------
 // Mode-based default policies
@@ -174,6 +176,8 @@ export class PermissionGate {
     private readonly conn: acp.AgentSideConnection,
     private readonly sessionId: string,
     private readonly policy: PermissionPolicy,
+    private readonly _tracker?: RequestTracker,
+    private readonly _eventBus?: EventBus,
   ) {}
 
   /**
@@ -224,7 +228,16 @@ export class PermissionGate {
       // buildPermissionRequest() below encapsulates the SDK format; when the SDK aligns with
       // the wire spec it can be replaced with: permission: { type, title, description }.
       const sdkRequest = buildPermissionRequest(this.sessionId, request, toolCallId);
-      const response = await this.conn.requestPermission(sdkRequest);
+      const _reqId = randomUUID();
+      this._tracker?.add(_reqId);
+      this._eventBus?.emit('acp:client-request:start', { sessionId: this.sessionId, requestId: _reqId });
+      let response: Awaited<ReturnType<acp.AgentSideConnection['requestPermission']>>;
+      try {
+        response = await this.conn.requestPermission(sdkRequest);
+      } finally {
+        this._tracker?.remove(_reqId);
+        this._eventBus?.emit('acp:client-request:end', { sessionId: this.sessionId, requestId: _reqId });
+      }
       // ISS-003/ISS-103: spec response is { granted: boolean }; SDK returns { outcome: {...} }.
       // isGranted() checks both shapes for forward compatibility.
       const granted = isGranted(response);

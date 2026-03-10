@@ -60,7 +60,7 @@ describe('CommandsEmitter', () => {
 
       const update = (calls[0] as { update: Record<string, unknown> }).update;
       const commands = update.availableCommands as Array<Record<string, unknown>>;
-      const status = commands.find((c) => c.name === '/status');
+      const status = commands.find((c) => c.id === 'status');
       expect(status).toBeDefined();
       expect(status?.description).toBe('Show runtime status and health');
     });
@@ -73,7 +73,7 @@ describe('CommandsEmitter', () => {
 
       const update = (calls[0] as { update: Record<string, unknown> }).update;
       const commands = update.availableCommands as Array<Record<string, unknown>>;
-      const cmd = commands.find((c) => c.name === '/agents');
+      const cmd = commands.find((c) => c.id === 'agents');
       expect(cmd).toBeDefined();
       expect(cmd?.description).toBe('List active agent chains');
     });
@@ -86,7 +86,7 @@ describe('CommandsEmitter', () => {
 
       const update = (calls[0] as { update: Record<string, unknown> }).update;
       const commands = update.availableCommands as Array<Record<string, unknown>>;
-      const cmd = commands.find((c) => c.name === '/analytics');
+      const cmd = commands.find((c) => c.id === 'analytics');
       expect(cmd).toBeDefined();
     });
 
@@ -98,7 +98,7 @@ describe('CommandsEmitter', () => {
 
       const update = (calls[0] as { update: Record<string, unknown> }).update;
       const commands = update.availableCommands as Array<Record<string, unknown>>;
-      const cmd = commands.find((c) => c.name === '/mode');
+      const cmd = commands.find((c) => c.id === 'mode');
       expect(cmd).toBeDefined();
     });
 
@@ -110,7 +110,7 @@ describe('CommandsEmitter', () => {
 
       const update = (calls[0] as { update: Record<string, unknown> }).update;
       const commands = update.availableCommands as Array<Record<string, unknown>>;
-      const cmd = commands.find((c) => c.name === '/review');
+      const cmd = commands.find((c) => c.id === 'review');
       expect(cmd).toBeDefined();
     });
 
@@ -122,7 +122,7 @@ describe('CommandsEmitter', () => {
 
       const update = (calls[0] as { update: Record<string, unknown> }).update;
       const commands = update.availableCommands as Array<Record<string, unknown>>;
-      const cmd = commands.find((c) => c.name === '/cancel');
+      const cmd = commands.find((c) => c.id === 'cancel');
       expect(cmd).toBeDefined();
       expect(cmd?.description).toBe('Cancel current operation');
     });

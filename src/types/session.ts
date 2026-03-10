@@ -98,8 +98,14 @@ export type SessionConfigOptionValue = string;
 
 /** A message in the conversation history */
 export type HistoryMessage = {
-  /** 'user' or 'assistant' */
-  role: 'user' | 'assistant';
+  /**
+   * Message role.
+   * - 'user'      — human turn
+   * - 'assistant' — agent turn
+   * - 'thinking'  — agent extended thinking/reasoning block (emitted as
+   *                 agent_thought_chunk on history replay per ACP prompt-turn spec)
+   */
+  role: 'user' | 'assistant' | 'thinking';
   /** Message content — string for plain text, or an array of content blocks for rich content */
   content: Array<{ type: string; [key: string]: unknown }> | string;
   /** Unix timestamp (ms) */
@@ -120,6 +126,8 @@ export type SessionContext = {
   createdAt: number;
   /** Unix timestamp (ms) when session was last updated */
   updatedAt: number;
+  /** Auto-generated session title from the first user prompt (first 100 chars) */
+  title?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -140,4 +148,6 @@ export type SessionSummary = {
   cwd: string;
   createdAt: number;
   updatedAt: number;
+  /** Auto-generated session title from the first user prompt */
+  title?: string;
 };

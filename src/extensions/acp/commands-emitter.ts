@@ -115,6 +115,6 @@ export class CommandsEmitter {
           ...update,
         } as unknown as acp.SessionUpdate,
       })
-      .catch(() => {});
+      .catch((err) => { console.error('[CommandsEmitter] emitCommands sessionUpdate failed:', String(err)); });
   }
 }
