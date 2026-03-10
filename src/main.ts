@@ -290,7 +290,7 @@ function createConnection(stream: AcpStream) {
     // Intentional: conn.closed should not reject in practice; guard against unexpected rejection
   });
 
-  const sessionAdapter = new SessionAdapter(conn, sessionManager, eventBus);
+  const sessionAdapter = new SessionAdapter(conn, sessionManager, eventBus, providerManager);
   sessionAdapter.register();
 
   const agentEventBridge = new AgentEventBridge(conn, eventBus, agentTracker);

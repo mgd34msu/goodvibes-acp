@@ -13,6 +13,7 @@ import type { Disposable } from '../../core/event-bus.js';
 import { EventBus } from '../../core/event-bus.js';
 import { SessionManager } from '../sessions/manager.js';
 import { buildConfigOptions, modeFromConfigValue, DEFAULT_MODEL_ID } from './config-adapter.js';
+import type { ProviderManager } from '../../plugins/agents/provider-manager.js';
 
 // ---------------------------------------------------------------------------
 // SessionAdapter
@@ -40,6 +41,7 @@ export class SessionAdapter {
     private readonly conn: AgentSideConnection,
     private readonly sessions: SessionManager,
     private readonly eventBus: EventBus,
+    private readonly providerManager?: ProviderManager,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -182,7 +184,7 @@ export class SessionAdapter {
       const currentModel = storedOptions?.['model'] ?? model ?? DEFAULT_MODEL_ID;
       const configUpdate: schema.SessionUpdate = {
         sessionUpdate: 'config_option_update' as const,
-        configOptions: buildConfigOptions(modeFromConfigValue(to), currentModel),
+        configOptions: buildConfigOptions(modeFromConfigValue(to), currentModel, this.providerManager?.getAvailableModels()),
       };
       await this._safeSessionUpdate(sessionId, configUpdate);
     }
@@ -204,7 +206,7 @@ export class SessionAdapter {
       storedOptions?.['mode'] ?? mode ?? 'justvibes',
     );
     const currentModel = storedOptions?.['model'] ?? model ?? DEFAULT_MODEL_ID;
-    const configOptions = buildConfigOptions(currentMode, currentModel);
+    const configOptions = buildConfigOptions(currentMode, currentModel, this.providerManager?.getAvailableModels());
 
     const update: schema.SessionUpdate = {
       sessionUpdate: 'config_option_update' as const,

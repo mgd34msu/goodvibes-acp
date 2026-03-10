@@ -7,6 +7,7 @@
  */
 
 import type { AgentType } from '../../types/agent.js';
+import { DEFAULT_MODEL_ID } from '../../extensions/acp/config-adapter.js';
 
 // ---------------------------------------------------------------------------
 // Agent type configuration
@@ -70,7 +71,7 @@ export const AGENT_TYPE_CONFIGS: Record<AgentType, AgentTypeConfig> = {
   engineer: {
     type: 'engineer',
     description: 'Full-stack engineer — implements features, writes code, and modifies files',
-    defaultModel: 'claude-sonnet-4-6',
+    defaultModel: DEFAULT_MODEL_ID,
     systemPromptPrefix: `You are a unified full-stack engineer with deep expertise across backend systems (APIs, databases, authentication) and frontend development (components, pages, layouts, styling). You implement production-ready features using precision tools for maximum efficiency.
 ${TOOLS_REFERENCE}
 
@@ -116,7 +117,7 @@ After every code edit, validate with:
   reviewer: {
     type: 'reviewer',
     description: 'Code review specialist — evaluates implementation quality and provides scored feedback',
-    defaultModel: 'claude-sonnet-4-6',
+    defaultModel: DEFAULT_MODEL_ID,
     systemPromptPrefix: `You are an enterprise-grade code review specialist. You analyze code with precision, identify issues with specific line numbers, and provide quantified assessments. You are thorough but constructive — every critique comes with a clear path to resolution. You provide extremely honest assessments and do not sugar-coat your answers.
 ${TOOLS_REFERENCE}
 
@@ -161,7 +162,7 @@ ${TOOLS_REFERENCE}
   tester: {
     type: 'tester',
     description: 'Testing specialist — writes and runs tests to verify correctness',
-    defaultModel: 'claude-sonnet-4-6',
+    defaultModel: DEFAULT_MODEL_ID,
     systemPromptPrefix: `You are a testing specialist. You write reliable, maintainable tests that achieve comprehensive coverage. Your core principle: 100% coverage goal, no skips, no auto-pass.
 ${TOOLS_REFERENCE}
 
@@ -206,7 +207,7 @@ ${TOOLS_REFERENCE}
   architect: {
     type: 'architect',
     description: 'Architecture specialist — designs systems, schemas, and high-level structures',
-    defaultModel: 'claude-sonnet-4-6',
+    defaultModel: DEFAULT_MODEL_ID,
     systemPromptPrefix: `You are an architecture and planning specialist. You design system architecture, plan implementation strategies, break down complex tasks into executable batches, identify dependencies and risks, and record all architectural decisions.
 ${TOOLS_REFERENCE}
 
@@ -260,7 +261,7 @@ Provide structured plans with:
   deployer: {
     type: 'deployer',
     description: 'Deployment specialist — manages CI/CD, infrastructure, and release processes',
-    defaultModel: 'claude-sonnet-4-6',
+    defaultModel: DEFAULT_MODEL_ID,
     systemPromptPrefix: `You are a deployment and DevOps specialist. You configure CI/CD pipelines, containerize applications, deploy to cloud platforms, and set up production infrastructure. You ensure atomic and production-ready deployments.
 ${TOOLS_REFERENCE}
 
@@ -303,7 +304,7 @@ Before deploying:
   integrator: {
     type: 'integrator',
     description: 'Integration specialist — connects services, APIs, and external systems',
-    defaultModel: 'claude-sonnet-4-6',
+    defaultModel: DEFAULT_MODEL_ID,
     systemPromptPrefix: `You are an integration specialist. You wire together services and APIs reliably, handling authentication, error recovery, and data mapping.
 ${TOOLS_REFERENCE}
 
@@ -336,7 +337,7 @@ ${TOOLS_REFERENCE}
   'skill-factory': {
     type: 'skill-factory',
     description: 'Skill creator — creates and maintains GoodVibes agent skills and workflow definitions',
-    defaultModel: 'claude-sonnet-4-6',
+    defaultModel: DEFAULT_MODEL_ID,
     systemPromptPrefix: `You are a skill creation specialist. You create production-quality agent skills. Skills are structured sets of instructions, scripts, and resources that agents load dynamically for specialized tasks.
 ${TOOLS_REFERENCE}
 
@@ -404,7 +405,7 @@ SKILL.md frontmatter:
   'agent-factory': {
     type: 'agent-factory',
     description: 'Agent creator — creates and maintains specialized GoodVibes agent type definitions',
-    defaultModel: 'claude-sonnet-4-6',
+    defaultModel: DEFAULT_MODEL_ID,
     systemPromptPrefix: `You are a meta-agent that creates highly effective, domain-specific agent definitions. You do not perform domain tasks yourself — you architect agents that will perform them exceptionally well.
 ${TOOLS_REFERENCE}
 

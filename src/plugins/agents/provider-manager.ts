@@ -15,7 +15,7 @@
 import type { ILLMProvider } from '../../types/registry.js';
 import type { RuntimeConfig } from '../../types/config.js';
 import { Registry } from '../../core/registry.js';
-import { DEFAULT_MODEL_ID } from '../../extensions/acp/config-adapter.js';
+import { DEFAULT_MODEL_ID, DEFAULT_MODEL_ENTRY } from '../../extensions/acp/config-adapter.js';
 import { AnthropicProvider } from './providers/anthropic.js';
 import { OpenAICompatibleProvider } from './providers/openai-compatible.js';
 
@@ -123,14 +123,7 @@ export class ProviderManager {
    */
   getAvailableModels(): AvailableModel[] {
     if (!this._config?.providers?.length) {
-      return [
-        {
-          id: DEFAULT_MODEL_ID,
-          name: 'Claude Sonnet 4.6',
-          description: 'Latest Sonnet — balanced performance',
-          providerName: 'Anthropic',
-        },
-      ];
+      return [{ ...DEFAULT_MODEL_ENTRY, providerName: DEFAULT_MODEL_ENTRY.providerName ?? 'Anthropic' }];
     }
 
     const result: AvailableModel[] = [];

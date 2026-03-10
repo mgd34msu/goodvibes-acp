@@ -52,13 +52,23 @@ export interface AvailableModelEntry {
 }
 
 /**
+ * Single source of truth for the default model metadata entry.
+ * Used by both config-adapter (fallback model list) and provider-manager
+ * (fallback when no models config is present) to avoid duplication.
+ */
+export const DEFAULT_MODEL_ENTRY: AvailableModelEntry = {
+  id: DEFAULT_MODEL_ID,
+  name: 'Claude Sonnet 4.6',
+  description: 'Latest Sonnet — balanced performance',
+  providerName: 'Anthropic',
+};
+
+/**
  * Minimal fallback model list used only when ProviderManager is not available.
  * The real model list comes from ProviderManager at runtime; this is a
  * last-resort defensive fallback for static/test contexts only.
  */
-const DEFAULT_MODELS: AvailableModelEntry[] = [
-  { id: DEFAULT_MODEL_ID, name: 'Claude Sonnet 4.6', description: 'Latest Sonnet — balanced performance', providerName: 'Anthropic' },
-];
+const DEFAULT_MODELS: AvailableModelEntry[] = [DEFAULT_MODEL_ENTRY];
 
 /**
  * Build the full set of ACP config options for a session.
