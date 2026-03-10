@@ -77,12 +77,26 @@ describe('buildConfigOptions', () => {
     expect(values).toContain('plan');
   });
 
-  test('model option has expected model values', () => {
+  test('model option contains default model in fallback list', () => {
+    // DEFAULT_MODELS is a single-entry fallback used only when ProviderManager
+    // is not available. The real model list comes from ProviderManager.
     const opts = buildConfigOptions();
     const modelOpt = opts[1] as { options: Array<{ value: string }> };
     const values = modelOpt.options.map((o) => o.value);
+    expect(values).toContain('claude-sonnet-4-6');
+  });
+
+  test('model option uses provided availableModels when supplied', () => {
+    const models = [
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', providerName: 'Anthropic' },
+      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', providerName: 'Anthropic' },
+      { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', providerName: 'Anthropic' },
+    ];
+    const opts = buildConfigOptions('justvibes', 'claude-sonnet-4-6', models);
+    const modelOpt = opts[1] as { options: Array<{ value: string }> };
+    const values = modelOpt.options.map((o) => o.value);
+    expect(values).toContain('claude-sonnet-4-6');
     expect(values).toContain('claude-opus-4-6');
-    expect(values).toContain('claude-sonnet-4-5-20250514');
     expect(values).toContain('claude-haiku-4-5-20251001');
   });
 

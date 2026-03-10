@@ -33,22 +33,49 @@ export type GoodVibesMode = 'justvibes' | 'vibecoding' | 'sandbox' | 'plan';
 const CONFIG_ID_MODE = 'goodvibes.mode' as const;
 const CONFIG_ID_MODEL = 'goodvibes.model' as const;
 
+/**
+ * Default model ID used when no ProviderManager config is available.
+ * Single source of truth for the fallback model string.
+ */
+export const DEFAULT_MODEL_ID = 'claude-sonnet-4-6';
+
 // ---------------------------------------------------------------------------
 // buildConfigOptions
 // ---------------------------------------------------------------------------
+
+/** A model entry for config option generation */
+export interface AvailableModelEntry {
+  id: string;
+  name: string;
+  description?: string;
+  providerName?: string;
+}
+
+/**
+ * Minimal fallback model list used only when ProviderManager is not available.
+ * The real model list comes from ProviderManager at runtime; this is a
+ * last-resort defensive fallback for static/test contexts only.
+ */
+const DEFAULT_MODELS: AvailableModelEntry[] = [
+  { id: DEFAULT_MODEL_ID, name: 'Claude Sonnet 4.6', description: 'Latest Sonnet — balanced performance', providerName: 'Anthropic' },
+];
 
 /**
  * Build the full set of ACP config options for a session.
  *
  * Returns a mode selector and a model selector pre-populated with
- * the current values.
+ * the current values. The model selector is dynamically built from
+ * `availableModels` (supplied by ProviderManager) or falls back to
+ * a minimal default list.
  *
- * @param currentMode  - Current GoodVibes mode (defaults to 'justvibes')
- * @param currentModel - Current model identifier (defaults to claude-sonnet-4-6)
+ * @param currentMode     - Current GoodVibes mode (defaults to 'justvibes')
+ * @param currentModel    - Current model identifier (defaults to claude-sonnet-4-6)
+ * @param availableModels - Model list from ProviderManager.getAvailableModels()
  */
 export function buildConfigOptions(
   currentMode: GoodVibesMode = 'justvibes',
-  currentModel: string = 'claude-sonnet-4-6',
+  currentModel: string = DEFAULT_MODEL_ID,
+  availableModels?: AvailableModelEntry[],
 ): schema.SessionConfigOption[] {
   const modeOption: schema.SessionConfigOption = {
     type: 'select',
@@ -81,35 +108,37 @@ export function buildConfigOptions(
     ] satisfies schema.SessionConfigSelectOption[],
   };
 
+  // Build model options from provided list or fall back to defaults.
+  const models = availableModels?.length ? availableModels : DEFAULT_MODELS;
+
+  // Group models by provider when multiple providers are present.
+  const providerNames = [...new Set(models.map((m) => m.providerName ?? 'Unknown'))];
+
+  // Build flat options list always (SDK SessionConfigSelectGroup type varies by SDK version).
+  // When multiple providers exist, model names are prefixed with provider for disambiguation.
+  const modelOptions: schema.SessionConfigSelectOption[] =
+    providerNames.length > 1
+      ? // Multi-provider: flat list with provider-prefixed names
+        models.map((m) => ({
+          value: m.id,
+          name: `${m.providerName ?? 'Unknown'} / ${m.name}`,
+          description: m.description,
+        }))
+      : // Single provider: flat list
+        models.map((m) => ({
+          value: m.id,
+          name: m.name,
+          description: m.description,
+        }));
+
   const modelOption: schema.SessionConfigOption = {
     type: 'select',
     id: CONFIG_ID_MODEL,
     name: 'Model',
     category: 'model',
-    description: 'Claude model to use for this session.',
+    description: 'LLM model to use for this session.',
     currentValue: currentModel,
-    options: [
-      {
-        value: 'claude-sonnet-4-6',
-        name: 'Claude Sonnet 4.6',
-        description: 'Latest Sonnet model with balanced performance.',
-      },
-      {
-        value: 'claude-opus-4-6',
-        name: 'Claude Opus 4.6',
-        description: 'Most capable model for complex tasks.',
-      },
-      {
-        value: 'claude-sonnet-4-5-20250514',
-        name: 'Claude Sonnet 4.5',
-        description: 'Balanced performance and speed.',
-      },
-      {
-        value: 'claude-haiku-4-5-20251001',
-        name: 'Claude Haiku 4.5',
-        description: 'Fastest model for simple tasks.',
-      },
-    ] satisfies schema.SessionConfigSelectOption[],
+    options: modelOptions,
   };
 
   return [modeOption, modelOption];

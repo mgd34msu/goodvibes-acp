@@ -57,6 +57,29 @@ export type RuntimeConfig = {
     maxParallel?: number;
     defaultTimeout?: number;
   };
+  /** LLM provider and model configuration */
+  models?: {
+    /** Default model ID to use when no model is specified */
+    default?: string;
+    /** Available model providers */
+    providers?: Array<{
+      /** Provider type: 'anthropic' or 'openai-compatible' */
+      type: 'anthropic' | 'openai-compatible';
+      /** Human-readable provider name (e.g., 'Anthropic', 'InceptionLabs', 'Groq') */
+      name: string;
+      /** Base URL for the API endpoint (required for openai-compatible) */
+      baseUrl?: string;
+      /** Available models from this provider */
+      models: Array<{
+        /** Model ID used in API calls */
+        id: string;
+        /** Human-readable display name */
+        name: string;
+        /** Optional description */
+        description?: string;
+      }>;
+    }>;
+  };
   /** Health check endpoint configuration */
   health?: {
     port?: number;

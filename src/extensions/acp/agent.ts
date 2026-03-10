@@ -13,7 +13,8 @@ import type { SessionContext, HistoryMessage } from '../../types/session.js';
 import { SessionManager } from '../sessions/manager.js';
 import { Registry } from '../../core/registry.js';
 import { EventBus } from '../../core/event-bus.js';
-import { buildConfigOptions, buildLegacyModes, modeFromConfigValue, CONFIG_ID_MODE, CONFIG_ID_MODEL } from './config-adapter.js';
+import { buildConfigOptions, buildLegacyModes, modeFromConfigValue, CONFIG_ID_MODE, CONFIG_ID_MODEL, DEFAULT_MODEL_ID } from './config-adapter.js';
+import type { ProviderManager } from '../../plugins/agents/provider-manager.js';
 import { toAcpError, ACP_ERROR_CODES } from './errors.js';
 import type { McpBridge } from '../mcp/bridge.js';
 import { PlanEmitter } from './plan-emitter.js';
@@ -278,6 +279,9 @@ export class GoodVibesAgent implements Agent {
    */
   private readonly _extensions: GoodVibesExtensions | undefined;
 
+  /** ProviderManager for model switching via setSessionConfigOption */
+  private readonly _providerManager: ProviderManager | undefined;
+
   constructor(
     private readonly conn: AgentSideConnection,
     private readonly registry: Registry,
@@ -290,10 +294,12 @@ export class GoodVibesAgent implements Agent {
       agentTracker: AgentTracker;
       eventRecorder: EventRecorder;
       stateStore: StateStore;
+      providerManager?: ProviderManager;
     },
   ) {
     this.planEmitter = new PlanEmitter(conn);
     this.commandsEmitter = new CommandsEmitter(conn);
+    this._providerManager = deps?.providerManager;
 
     // ISS-025: Wire GoodVibesExtensions when runtime deps are available.
     if (deps !== undefined) {
@@ -424,7 +430,11 @@ export class GoodVibesAgent implements Agent {
 
     return {
       sessionId,
-      configOptions: buildConfigOptions(),
+      configOptions: buildConfigOptions(
+        'justvibes',
+        this._providerManager?.getActiveModelId() ?? DEFAULT_MODEL_ID,
+        this._providerManager?.getAvailableModels(),
+      ),
       // Per ACP session-modes spec (transition period): include legacy `modes`
       // alongside the new `configOptions` so clients that have not yet migrated
       // continue to receive mode state on session/new.
@@ -510,6 +520,7 @@ export class GoodVibesAgent implements Agent {
       configOptions: buildConfigOptions(
         loadedMode,
         context.config.model,
+        this._providerManager?.getAvailableModels(),
       ),
       // Per ACP session-modes spec (transition period): include legacy `modes`
       // alongside the new `configOptions` so clients that have not yet migrated
@@ -750,13 +761,22 @@ export class GoodVibesAgent implements Agent {
       await this.sessions.setMode(sessionId, mode);
     }
 
+    // If model changed, switch the active provider via ProviderManager
+    if (configId === CONFIG_ID_MODEL && this._providerManager) {
+      this._providerManager.setActiveModel(value);
+    }
+
     // Re-read state to build accurate configOptions
     const context = await this.sessions.get(sessionId);
     const currentMode = modeFromConfigValue(context?.config.mode ?? 'justvibes');
-    const currentModel = context?.config.model ?? 'claude-sonnet-4-6';
+    const currentModel = context?.config.model ?? DEFAULT_MODEL_ID;
 
     return {
-      configOptions: buildConfigOptions(currentMode, currentModel),
+      configOptions: buildConfigOptions(
+        currentMode,
+        currentModel,
+        this._providerManager?.getAvailableModels(),
+      ),
     };
   }
 

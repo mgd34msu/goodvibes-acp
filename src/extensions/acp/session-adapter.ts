@@ -12,7 +12,7 @@ import type { SessionState } from '../../types/session.js';
 import type { Disposable } from '../../core/event-bus.js';
 import { EventBus } from '../../core/event-bus.js';
 import { SessionManager } from '../sessions/manager.js';
-import { buildConfigOptions, modeFromConfigValue } from './config-adapter.js';
+import { buildConfigOptions, modeFromConfigValue, DEFAULT_MODEL_ID } from './config-adapter.js';
 
 // ---------------------------------------------------------------------------
 // SessionAdapter
@@ -179,7 +179,7 @@ export class SessionAdapter {
     const context = await this.sessions.get(sessionId).catch(() => undefined);
     if (context) {
       const { configOptions: storedOptions, model } = context.config;
-      const currentModel = storedOptions?.['model'] ?? model ?? 'claude-sonnet-4-6';
+      const currentModel = storedOptions?.['model'] ?? model ?? DEFAULT_MODEL_ID;
       const configUpdate: schema.SessionUpdate = {
         sessionUpdate: 'config_option_update' as const,
         configOptions: buildConfigOptions(modeFromConfigValue(to), currentModel),
@@ -203,7 +203,7 @@ export class SessionAdapter {
     const currentMode = modeFromConfigValue(
       storedOptions?.['mode'] ?? mode ?? 'justvibes',
     );
-    const currentModel = storedOptions?.['model'] ?? model ?? 'claude-sonnet-4-6';
+    const currentModel = storedOptions?.['model'] ?? model ?? DEFAULT_MODEL_ID;
     const configOptions = buildConfigOptions(currentMode, currentModel);
 
     const update: schema.SessionUpdate = {

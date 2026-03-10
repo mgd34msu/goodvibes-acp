@@ -38,8 +38,8 @@ import { MemoryManager } from './extensions/memory/manager.js';
 import { LogsManager } from './extensions/logs/manager.js';
 import { HookEngine } from './core/hook-engine.js';
 import { HookRegistrar } from './extensions/hooks/registrar.js';
-import { AnthropicProvider } from './plugins/agents/providers/anthropic.js';
-import { OpenAICompatibleProvider } from './plugins/agents/providers/openai-compatible.js';
+import { ProviderManager } from './plugins/agents/provider-manager.js';
+import type { RuntimeConfig } from './types/config.js';
 import { McpToolProxy } from './extensions/mcp/tool-proxy.js';
 import { ShutdownManager, SHUTDOWN_ORDER } from './extensions/lifecycle/shutdown.js';
 import { HealthCheck } from './extensions/lifecycle/health.js';
@@ -165,29 +165,22 @@ ReviewPlugin.register(registry);
 AgentsPlugin.register(registry);
 
 // ---------------------------------------------------------------------------
-// LLM + Tool providers — these enable the real AgentLoop path in AgentSpawnerPlugin
+// LLM provider — config-driven via ProviderManager
 // ---------------------------------------------------------------------------
-// Provider selection via environment variables:
-//   LLM_PROVIDER=openai-compatible  requires LLM_BASE_URL + LLM_API_KEY
-//   (default) ANTHROPIC_API_KEY set  → AnthropicProvider
-if (process.env.LLM_PROVIDER === 'openai-compatible') {
-  const llmBaseUrl = process.env.LLM_BASE_URL;
-  const llmApiKey = process.env.LLM_API_KEY;
-  if (!llmBaseUrl || !llmApiKey) {
-    console.error('[goodvibes-acp] WARNING: LLM_PROVIDER=openai-compatible requires LLM_BASE_URL and LLM_API_KEY — LLM provider not registered');
-  } else {
-    const llmName = process.env.LLM_MODEL ? `openai-compatible (${process.env.LLM_MODEL})` : 'openai-compatible';
-    const llmProvider = new OpenAICompatibleProvider({ apiKey: llmApiKey, baseUrl: llmBaseUrl });
-    registry.register('llm-provider', llmProvider);
-    console.error(`[goodvibes-acp] LLM provider registered: ${llmName} @ ${llmBaseUrl}`);
-  }
-} else if (!process.env.ANTHROPIC_API_KEY) {
-  console.error('[goodvibes-acp] WARNING: ANTHROPIC_API_KEY not set — LLM provider not registered, agent loops will fail on first call');
-} else {
-  const llmProvider = new AnthropicProvider(); // reads ANTHROPIC_API_KEY from .env
-  registry.register('llm-provider', llmProvider);
-  console.error('[goodvibes-acp] LLM provider registered: anthropic (claude)');
+// Provider and model selection is now driven by the `models` section of
+// goodvibes.config.json. ANTHROPIC_API_KEY is supported as a backward-compat
+// fallback when no models config is present.
+
+const modelsConfig = config.get<RuntimeConfig['models']>('models');
+const providerManager = new ProviderManager(modelsConfig, registry);
+
+// Pre-seed ANTHROPIC_API_KEY for backward compatibility.
+if (process.env.ANTHROPIC_API_KEY) {
+  providerManager.setApiKey('Anthropic', process.env.ANTHROPIC_API_KEY);
 }
+
+// Activate the default model and register the provider in the registry.
+providerManager.activateDefault();
 // Tool provider registered below after mcpToolProxy is created
 
 // Re-register the agent spawner with the McpToolCallBridge progress factory
@@ -256,8 +249,19 @@ const daemonManager = new DaemonManager(eventBus);
 // ---------------------------------------------------------------------------
 
 function createConnection(stream: AcpStream) {
+  // Create EventRecorder before the AgentSideConnection so it can be passed
+  // to GoodVibesAgent deps at construction time.
+  const eventRecorder = new EventRecorder(eventBus);
+  eventRecorder.register();
+
   const conn = new acp.AgentSideConnection(
-    (c) => new GoodVibesAgent(c, registry, eventBus, sessionManager, wrfcAdapter, mcpBridge),
+    (c) => new GoodVibesAgent(c, registry, eventBus, sessionManager, wrfcAdapter, mcpBridge, {
+      healthCheck,
+      agentTracker,
+      eventRecorder,
+      stateStore,
+      providerManager,
+    }),
     stream,
   );
 
@@ -291,9 +295,6 @@ function createConnection(stream: AcpStream) {
 
   const agentEventBridge = new AgentEventBridge(conn, eventBus, agentTracker);
   agentEventBridge.register();
-
-  const eventRecorder = new EventRecorder(eventBus);
-  eventRecorder.register();
 
   const goodvibesExtensions = new GoodVibesExtensions(
     eventBus, stateStore, registry, healthCheck, agentTracker, eventRecorder,
