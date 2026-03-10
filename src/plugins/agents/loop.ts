@@ -136,6 +136,8 @@ export class AgentLoop {
       ? `${contextLines.join('\n')}\n\n${this.config.systemPrompt}`
       : this.config.systemPrompt;
 
+    console.error(`[AgentLoop] Starting: model=${this.config.model}, maxTurns=${this.config.maxTurns}, tools=${toolDefs.length}, cwd=${this.config.cwd ?? 'none'}`);
+
     while (turns < this.config.maxTurns) {
       // Check cancellation before each turn
       if (this.config.signal?.aborted) {
@@ -188,6 +190,7 @@ export class AgentLoop {
         stopReason: response.stopReason,
         usage: response.usage,
       });
+      console.error(`[AgentLoop] Turn ${turns}: stopReason=${response.stopReason}, input=${response.usage.inputTokens}, output=${response.usage.outputTokens}`);
 
       // Append assistant response to history
       messages.push({ role: 'assistant', content: response.content });
@@ -202,11 +205,13 @@ export class AgentLoop {
 
       // end_turn — agent completed normally
       if (response.stopReason === 'end_turn') {
+        console.error(`[AgentLoop] Done: turns=${turns}, stopReason='end_turn', filesModified=${this._filesModified.size}`);
         return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'end_turn', filesModified: Array.from(this._filesModified) };
       }
 
       // max_tokens — response was truncated; propagate as distinct stop reason (KB-04)
       if (response.stopReason === 'max_tokens') {
+        console.error(`[AgentLoop] Done: turns=${turns}, stopReason='max_tokens', filesModified=${this._filesModified.size}`);
         return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'max_tokens', filesModified: Array.from(this._filesModified) };
       }
 
@@ -221,6 +226,7 @@ export class AgentLoop {
       return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'end_turn', filesModified: Array.from(this._filesModified) };
     }
 
+    console.error(`[AgentLoop] Done: turns=${turns}, stopReason='max_turn_requests', filesModified=${this._filesModified.size}`);
     return { output: lastTextOutput, turns, usage: totalUsage, stopReason: 'max_turn_requests', filesModified: Array.from(this._filesModified) };
   }
 
@@ -266,6 +272,7 @@ export class AgentLoop {
 
       const startTime = Date.now();
       this.config.onProgress?.({ type: 'tool_start', turn, toolName: block.name });
+      console.error(`[AgentLoop] Tool: ${block.name}`);
 
       try {
         const [providerName, toolName] = this._splitToolName(block.name);
