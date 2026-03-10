@@ -159,7 +159,27 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
       state.controller = controller;
 
       const model = config.model ?? typeConfig.defaultModel;
-      const systemPrompt = typeConfig.systemPromptPrefix;
+
+      // Build project dossier if cwd is available
+      let dossierContent = '';
+      if (sessionCwd) {
+        try {
+          const { buildDossier } = await import('./dossier.js');
+          const dossier = await buildDossier({
+            cwd: sessionCwd,
+            agentType: config.type,
+          });
+          if (dossier.content) {
+            dossierContent = dossier.content;
+          }
+        } catch (dossierErr) {
+          console.error('[AgentSpawner] Dossier build failed (continuing without):', String(dossierErr));
+        }
+      }
+
+      const systemPrompt = dossierContent
+        ? `${dossierContent}\n\n---\n\n${typeConfig.systemPromptPrefix}`
+        : typeConfig.systemPromptPrefix;
 
       const loop = new AgentLoop({
         provider: llmProvider,

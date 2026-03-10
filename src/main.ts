@@ -371,11 +371,30 @@ const wrfcAdapter = {
 
           const sessionCwd = await resolveSessionCwd(params.sessionId);
 
+          // Build project dossier for reviewer
+          let reviewerDossier = '';
+          if (sessionCwd) {
+            try {
+              const { buildDossier } = await import('./plugins/agents/dossier.js');
+              const dossier = await buildDossier({
+                cwd: sessionCwd,
+                agentType: 'reviewer',
+                maxTokens: 2000,
+              });
+              reviewerDossier = dossier.content;
+            } catch (dossierErr) {
+              console.error('[WRFC] Reviewer dossier build failed (continuing without):', String(dossierErr));
+            }
+          }
+          const fullReviewerPrompt = reviewerDossier
+            ? `${reviewerDossier}\n\n---\n\n${reviewerPrompt}`
+            : reviewerPrompt;
+
           const loop = new AgentLoop({
             provider: llmProvider,
             tools: toolProviders,
             model: reviewerConfig.defaultModel,
-            systemPrompt: reviewerPrompt,
+            systemPrompt: fullReviewerPrompt,
             maxTurns: reviewerConfig.maxTurns,
             onFileRead: (path) => reviewToolProvider.trackFileRead(path),
             cwd: sessionCwd,
@@ -472,11 +491,29 @@ const wrfcAdapter = {
 
           const fixerSessionCwd = await resolveSessionCwd(params.sessionId);
 
+          // Build project dossier for fixer (engineer)
+          let fixerDossier = '';
+          if (fixerSessionCwd) {
+            try {
+              const { buildDossier } = await import('./plugins/agents/dossier.js');
+              const dossier = await buildDossier({
+                cwd: fixerSessionCwd,
+                agentType: 'engineer',
+              });
+              fixerDossier = dossier.content;
+            } catch (dossierErr) {
+              console.error('[WRFC] Fixer dossier build failed (continuing without):', String(dossierErr));
+            }
+          }
+          const fullFixerPrompt = fixerDossier
+            ? `${fixerDossier}\n\n---\n\n${engineerConfig.systemPromptPrefix}`
+            : engineerConfig.systemPromptPrefix;
+
           const loop = new AgentLoop({
             provider: llmProvider,
             tools: toolProviders,
             model: engineerConfig.defaultModel,
-            systemPrompt: engineerConfig.systemPromptPrefix,
+            systemPrompt: fullFixerPrompt,
             maxTurns: engineerConfig.maxTurns,
             cwd: fixerSessionCwd,
             workspaceRoots: fixerSessionCwd ? [fixerSessionCwd] : undefined,
