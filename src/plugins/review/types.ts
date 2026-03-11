@@ -68,17 +68,17 @@ export interface SubmitReviewInput {
 export interface ScoringConfig {
   /** Starting score before deductions (default: 10.0) */
   base: number;
-  /** Score deduction per critical issue (default: -2.0) */
+  /** Score deduction per critical issue (default: -3.0) */
   criticalPenalty: number;
-  /** Maximum total deduction from critical issues (default: -6.0) */
+  /** Maximum total deduction from critical issues (default: -8.0) */
   criticalCap: number;
-  /** Score deduction per major issue (default: -0.5) */
+  /** Score deduction per major issue (default: -1.0) */
   majorPenalty: number;
-  /** Maximum total deduction from major issues (default: -3.0) */
+  /** Maximum total deduction from major issues (default: -4.0) */
   majorCap: number;
-  /** Score deduction per minor issue (default: -0.1) */
+  /** Score deduction per minor issue (default: -0.2) */
   minorPenalty: number;
-  /** Maximum total deduction from minor issues (default: -1.0) */
+  /** Maximum total deduction from minor issues (default: -2.0) */
   minorCap: number;
   /** Score deduction per nitpick (default: 0.0 — informational only) */
   nitpickPenalty: number;
@@ -87,11 +87,11 @@ export interface ScoringConfig {
 /** Default scoring configuration used by calculateScore */
 export const DEFAULT_SCORING_CONFIG: ScoringConfig = {
   base: 10.0,
-  criticalPenalty: -2.0,
-  criticalCap: -6.0,
-  majorPenalty: -0.5,
-  majorCap: -3.0,
-  minorPenalty: -0.1,
-  minorCap: -1.0,
+  criticalPenalty: -3.0,
+  criticalCap: -8.0,
+  majorPenalty: -1.0,
+  majorCap: -4.0,
+  minorPenalty: -0.2,
+  minorCap: -2.0,
   nitpickPenalty: 0.0,
 };
