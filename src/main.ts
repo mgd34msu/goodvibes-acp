@@ -184,6 +184,7 @@ const providerManager = new ProviderManager(modelsConfig, registry);
 // Activate the default model and register the provider in the registry.
 // API keys are seeded automatically from apiKeyEnv config fields in ProviderManager constructor.
 providerManager.activateDefault();
+registry.register('provider-manager', providerManager);
 // Tool provider registered below after mcpToolProxy is created
 
 // Re-register the agent spawner with the McpToolCallBridge progress factory

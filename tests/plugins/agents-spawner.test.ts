@@ -429,4 +429,80 @@ describe('AgentSpawnerPlugin — AgentLoop mode (MockProvider)', () => {
     expect(params.tools!.length).toBeGreaterThan(0);
     expect(params.tools![0].name).toBe('my-tools__do_thing');
   });
+
+  it('uses ProviderManager active model when no model in config', async () => {
+    const mock = new MockProvider();
+    mock.enqueue(END_TURN_RESPONSE);
+    const registry = makeRegistryWithMock(mock);
+
+    // Register a mock provider-manager that reports 'mercury-2' as the active model
+    const mockProviderManager = {
+      getActiveModelId: () => 'mercury-2',
+    };
+    registry.register('provider-manager', mockProviderManager);
+
+    const spawner = new AgentSpawnerPlugin(registry);
+    const handle = await spawner.spawn(makeConfig());
+    await spawner.result(handle);
+
+    // Spawner should have forwarded the provider-manager's active model to AgentLoop
+    expect(mock.calls.length).toBe(1);
+    expect(mock.calls[0].model).toBe('mercury-2');
+  });
+
+  it('respects explicit model in config over ProviderManager active model', async () => {
+    const mock = new MockProvider();
+    mock.enqueue(END_TURN_RESPONSE);
+    const registry = makeRegistryWithMock(mock);
+
+    // ProviderManager would report 'mercury-2', but config.model is explicit
+    const mockProviderManager = {
+      getActiveModelId: () => 'mercury-2',
+    };
+    registry.register('provider-manager', mockProviderManager);
+
+    const spawner = new AgentSpawnerPlugin(registry);
+    const handle = await spawner.spawn(makeConfig({ model: 'claude-sonnet-4-6' }));
+    await spawner.result(handle);
+
+    // Explicit model should win over ProviderManager
+    expect(mock.calls.length).toBe(1);
+    expect(mock.calls[0].model).toBe('claude-sonnet-4-6');
+  });
+
+  it('falls back to typeConfig.defaultModel when provider-manager throws', async () => {
+    const mock = new MockProvider();
+    mock.enqueue(END_TURN_RESPONSE);
+    const registry = makeRegistryWithMock(mock);
+
+    // Register a provider-manager whose getActiveModelId() throws
+    const throwingProviderManager = {
+      getActiveModelId: (): string => { throw new Error('provider unavailable'); },
+    };
+    registry.register('provider-manager', throwingProviderManager);
+
+    const spawner = new AgentSpawnerPlugin(registry);
+    const handle = await spawner.spawn(makeConfig());
+    await spawner.result(handle);
+
+    // Catch block should have fallen through to typeConfig.defaultModel
+    expect(mock.calls.length).toBe(1);
+    expect(mock.calls[0].model).toBe('claude-sonnet-4-6');
+  });
+
+  it('uses typeConfig.defaultModel when no provider-manager is registered', async () => {
+    const mock = new MockProvider();
+    mock.enqueue(END_TURN_RESPONSE);
+    // Registry has llm-provider but NO provider-manager
+    const registry = makeRegistryWithMock(mock);
+
+    const spawner = new AgentSpawnerPlugin(registry);
+    // No explicit model in config
+    const handle = await spawner.spawn(makeConfig());
+    await spawner.result(handle);
+
+    // Should have fallen back to DEFAULT_MODEL_ID ('claude-sonnet-4-6')
+    expect(mock.calls.length).toBe(1);
+    expect(mock.calls[0].model).toBe('claude-sonnet-4-6');
+  });
 });

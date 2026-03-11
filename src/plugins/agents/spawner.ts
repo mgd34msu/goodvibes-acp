@@ -160,7 +160,15 @@ export class AgentSpawnerPlugin implements IAgentSpawner {
       const controller = new AbortController();
       state.controller = controller;
 
-      const model = config.model ?? typeConfig.defaultModel;
+      // Priority: explicit config.model > provider-manager active model > typeConfig.defaultModel
+      let model = config.model;
+      if (!model) {
+        try {
+          const pm = this._registry?.get<{ getActiveModelId(): string }>('provider-manager');
+          if (pm) model = pm.getActiveModelId();
+        } catch { /* fall through */ }
+        model ??= typeConfig.defaultModel;  // final fallback
+      }
 
       // Build project dossier if cwd is available
       let dossierContent = '';
