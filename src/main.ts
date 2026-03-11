@@ -9,7 +9,14 @@
  * All diagnostic output goes to stderr so stdout remains clean for ACP.
  */
 
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Socket } from 'node:net';
+
+// Resolve project root from main.ts location (src/main.ts -> project root)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const PROJECT_ROOT = resolve(__dirname, '..');
 import * as acp from '@agentclientprotocol/sdk';
 import { EventBus } from './core/event-bus.js';
 import { StateStore } from './core/state-store.js';
@@ -79,7 +86,7 @@ const eventBus = new EventBus();
 const stateStore = new StateStore();
 const registry = new Registry();
 const config = new Config();
-await config.load('goodvibes.config.json');
+await config.load(resolve(PROJECT_ROOT, 'goodvibes.config.json'));
 const configValidation = config.validate();
 if (!configValidation.valid) {
   for (const err of configValidation.errors) {
