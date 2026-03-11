@@ -430,7 +430,7 @@ const wrfcAdapter = {
           const loop = new AgentLoop({
             provider: llmProvider,
             tools: toolProviders,
-            model: reviewerConfig.defaultModel,
+            model: providerManager.getActiveModelId(),
             systemPrompt: fullReviewerPrompt,
             maxTurns: reviewerConfig.maxTurns,
             onFileRead: (path) => reviewToolProvider.trackFileRead(path),
@@ -549,7 +549,7 @@ const wrfcAdapter = {
           const loop = new AgentLoop({
             provider: llmProvider,
             tools: toolProviders,
-            model: engineerConfig.defaultModel,
+            model: providerManager.getActiveModelId(),
             systemPrompt: fullFixerPrompt,
             maxTurns: engineerConfig.maxTurns,
             cwd: fixerSessionCwd,
