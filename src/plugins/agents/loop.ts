@@ -25,6 +25,16 @@ import type {
 import type { AgentProgressEvent } from '../../types/agent.js';
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/** Default idle timeout between consecutive stream chunks (2 minutes). */
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 120_000;
+
+/** Default initial timeout waiting for the very first stream chunk (3 minutes). */
+const DEFAULT_STREAM_INITIAL_TIMEOUT_MS = 180_000;
+
+// ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
@@ -58,6 +68,20 @@ export interface AgentLoopConfig {
    * (useful in tests or when the provider does not support streaming).
    */
   streaming?: boolean;
+  /**
+   * Maximum milliseconds to wait for the **first chunk** from provider.stream().
+   * Covers cold-start latency. If no chunk arrives within this window the stream
+   * is aborted and the turn returns stopReason 'error'.
+   * Default: 180_000 (3 minutes).
+   */
+  streamInitialTimeoutMs?: number;
+  /**
+   * Maximum milliseconds allowed between consecutive chunks during streaming.
+   * Resets on every received chunk. If the connection goes silent (e.g. an API
+   * hangs mid-stream without closing) the stream is aborted after this window.
+   * Default: 120_000 (2 minutes).
+   */
+  streamIdleTimeoutMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -241,6 +265,10 @@ export class AgentLoop {
    * Run a single LLM turn via provider.stream(), accumulating chunks into a
    * ChatResponse-equivalent. Emits agent_message_chunk progress events for
    * each text_delta chunk so ACP clients receive streaming text deltas.
+   *
+   * Idle/initial timeouts abort the stream if the provider goes silent:
+   *   - streamInitialTimeoutMs: max wait for the very first chunk (cold-start)
+   *   - streamIdleTimeoutMs: max silence between consecutive chunks (hang detection)
    */
   private async _runStreaming(params: ChatParams): Promise<import('../../types/llm.js').ChatResponse> {
     const content: ContentBlock[] = [];
@@ -253,41 +281,91 @@ export class AgentLoop {
     // Accumulate text for the current text block
     let currentText = '';
 
-    for await (const chunk of this.config.provider.stream!(params)) {
-      if (chunk.type === 'text_delta') {
-        currentText += chunk.text;
-        // Emit streaming progress event for ACP clients
-        this.config.onProgress?.({ type: 'agent_message_chunk', chunk: { type: 'text', text: chunk.text } });
-      } else if (chunk.type === 'thinking_delta') {
-        // Emit agent_thought_chunk progress event for ACP clients (prompt-turn spec)
-        this.config.onProgress?.({ type: 'agent_thought_chunk', chunk: { type: 'text', text: chunk.thinking } });
-      } else if (chunk.type === 'tool_use_start') {
-        // Flush any accumulated text block before starting a tool_use block
-        if (currentText) {
-          content.push({ type: 'text', text: currentText });
-          currentText = '';
+    // -------------------------------------------------------------------------
+    // Timeout setup — idle and initial response timeouts
+    // -------------------------------------------------------------------------
+    const idleMs = this.config.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;
+    const initialMs = this.config.streamInitialTimeoutMs ?? DEFAULT_STREAM_INITIAL_TIMEOUT_MS;
+
+    // Internal abort controller — merged with the external signal
+    const internalController = new AbortController();
+    const onExternalAbort = () => internalController.abort();
+    this.config.signal?.addEventListener('abort', onExternalAbort, { once: true });
+
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    let firstChunkReceived = false;
+
+    const resetIdleTimer = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        console.error(
+          `[AgentLoop] Stream idle timeout — no data received for ${idleMs}ms`,
+        );
+        internalController.abort();
+      }, idleMs);
+    };
+
+    // Start with the initial (cold-start) timeout
+    idleTimer = setTimeout(() => {
+      console.error(
+        `[AgentLoop] Stream initial response timeout — no first chunk received within ${initialMs}ms`,
+      );
+      internalController.abort();
+    }, initialMs);
+
+    try {
+      // Pass the merged signal to the provider so fetch/http aborts cleanly
+      const streamParams: ChatParams = { ...params, signal: internalController.signal };
+
+      for await (const chunk of this._abortableStream(this.config.provider.stream!(streamParams), internalController.signal)) {
+        if (!firstChunkReceived) {
+          firstChunkReceived = true;
+          // Switch from initial timeout to idle timeout on first chunk
         }
-        // Flush any previous pending tool_use block (shouldn't happen, but safe)
-        if (currentToolUse) {
-          content.push({
-            type: 'tool_use',
-            id: currentToolUse.id,
-            name: currentToolUse.name,
-            input: this._parseToolInput(currentToolUse.inputParts.join('')),
-          });
+        // Reset idle timer on every received chunk
+        resetIdleTimer();
+
+        if (chunk.type === 'text_delta') {
+          currentText += chunk.text;
+          // Emit streaming progress event for ACP clients
+          this.config.onProgress?.({ type: 'agent_message_chunk', chunk: { type: 'text', text: chunk.text } });
+        } else if (chunk.type === 'thinking_delta') {
+          // Emit agent_thought_chunk progress event for ACP clients (prompt-turn spec)
+          this.config.onProgress?.({ type: 'agent_thought_chunk', chunk: { type: 'text', text: chunk.thinking } });
+        } else if (chunk.type === 'tool_use_start') {
+          // Flush any accumulated text block before starting a tool_use block
+          if (currentText) {
+            content.push({ type: 'text', text: currentText });
+            currentText = '';
+          }
+          // Flush any previous pending tool_use block (shouldn't happen, but safe)
+          if (currentToolUse) {
+            content.push({
+              type: 'tool_use',
+              id: currentToolUse.id,
+              name: currentToolUse.name,
+              input: this._parseToolInput(currentToolUse.inputParts.join('')),
+            });
+          }
+          currentToolUse = { id: chunk.id, name: chunk.name, inputParts: [] };
+        } else if (chunk.type === 'tool_use_delta') {
+          if (currentToolUse) {
+            currentToolUse.inputParts.push(chunk.input_json);
+          }
+        } else if (chunk.type === 'stop') {
+          stopReason = chunk.stopReason;
+          usage = chunk.usage;
         }
-        currentToolUse = { id: chunk.id, name: chunk.name, inputParts: [] };
-      } else if (chunk.type === 'tool_use_delta') {
-        if (currentToolUse) {
-          currentToolUse.inputParts.push(chunk.input_json);
-        }
-      } else if (chunk.type === 'stop') {
-        stopReason = chunk.stopReason;
-        usage = chunk.usage;
       }
+    } finally {
+      // Always clean up timers and external abort listener
+      if (idleTimer) clearTimeout(idleTimer);
+      this.config.signal?.removeEventListener('abort', onExternalAbort);
     }
 
-    // Flush any remaining accumulated content
+    // Flush any remaining accumulated content.
+    // This code only runs on the success path — if an error was thrown above,
+    // control never reaches here (the throw propagates out of _runStreaming).
     if (currentText) {
       content.push({ type: 'text', text: currentText });
     }
@@ -301,6 +379,47 @@ export class AgentLoop {
     }
 
     return { content, stopReason, usage };
+  }
+
+  /**
+   * Wraps an async iterable with abort-signal awareness so that each `.next()`
+   * call is raced against the signal. When the signal fires, the iterator is
+   * interrupted immediately — even if the underlying generator is mid-`await`.
+   *
+   * This ensures idle/initial timeouts and external abort signals can
+   * actually interrupt a hung provider, regardless of whether the provider
+   * itself honours the signal (e.g. mock providers in tests).
+   */
+  private async *_abortableStream<T>(
+    source: AsyncIterable<T>,
+    signal: AbortSignal,
+  ): AsyncGenerator<T> {
+    const iterator = source[Symbol.asyncIterator]();
+
+    // A promise that rejects as soon as the signal is aborted
+    let abortReject!: (reason: unknown) => void;
+    const abortPromise = new Promise<never>((_resolve, reject) => {
+      abortReject = reject;
+    });
+
+    const onAbort = () => abortReject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+    if (signal.aborted) {
+      onAbort();
+    } else {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    try {
+      while (true) {
+        const result = await Promise.race([iterator.next(), abortPromise]);
+        if (result.done) break;
+        yield result.value;
+      }
+    } finally {
+      signal.removeEventListener('abort', onAbort);
+      // Best-effort cleanup of the underlying iterator
+      await iterator.return?.();
+    }
   }
 
   /** Safely parse accumulated input JSON from tool_use_delta chunks. */
